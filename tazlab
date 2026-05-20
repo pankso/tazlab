@@ -8,17 +8,18 @@
 VERSION="0.2"
 
 # --- UI & Colors ---
-C_RED='\033[1;31m'
-C_GREEN='\033[1;32m'
-C_YELLOW='\033[1;33m'
-C_BLUE='\033[1;34m'
-C_CYAN='\033[1;36m'
-C_NONE='\033[0m'
+esc="$(printf '\033')"
+C_RED="${esc}[1;31m"
+C_GREEN="${esc}[1;32m"
+C_YELLOW="${esc}[1;33m"
+C_BLUE="${esc}[1;34m"
+C_CYAN="${esc}[1;36m"
+C_NONE="${esc}[0m"
 
-msg()     { echo -e "${C_BLUE}::${C_NONE} $*"; }
-success() { echo -e " ${C_GREEN}✓${C_NONE} $*"; }
-warn()    { echo -e " ${C_YELLOW}⚠${C_NONE} $*" >&2; }
-die()     { echo -e " ${C_RED}☠${C_NONE} $*" >&2; exit 1; }
+msg()     { echo "${C_BLUE}::${C_NONE} $*"; }
+success() { echo " ${C_GREEN}✓${C_NONE} $*"; }
+warn()    { echo " ${C_YELLOW}⚠${C_NONE} $*" >&2; }
+die()     { echo " ${C_RED}☠${C_NONE} $*" >&2; exit 1; }
 
 # Resolve the calling user when invoked via sudo, so state lives in their
 # home (~/.slitaz) rather than /root/.slitaz.
@@ -69,6 +70,8 @@ Commands:
     enter-user [u]   Mount and enter the chroot as an unprivileged user
     umount           Unmount the chroot
     cook <pkg>       Cook a package inside the chroot (root)
+    run <cmd>        Run an arbitrary command inside the chroot
+    update-chroot    Update all packages inside the chroot (tazpkg upgrade)
     nuke             Wipe the chroot (keeps wok/packages/cache/log/src/repos/iso)
     status           Show chroot, wok, packages, repos status
 
@@ -86,8 +89,13 @@ Commands:
     list [filter]    List package recipes in the wok
     search <pat>     Search for a pattern in all receipts
     info <pkg>       Show package receipt (version, deps, desc...)
+    edit <pkg>       Open a package receipt in \$EDITOR
+    deps <pkg>       Show build and runtime dependencies of a package
 
   Maintenance:
+    check            Verify all host dependencies are installed
+    config           Show effective configuration (all variables resolved)
+    init             Interactive first-time setup wizard
     clean            Clean cache and build logs
 
 Commands that touch the chroot or mounts auto-elevate via sudo.
@@ -315,6 +323,23 @@ cmd_cook() {
 	cmd_umount
 }
 
+cmd_run() {
+	[ -n "$1" ] || die "usage: tazlab run <command>"
+	cmd_mount
+	unshare -u chroot "$CHROOT" /bin/sh -c \
+		"hostname slitaz; $*"
+	cmd_umount
+}
+
+cmd_update_chroot() {
+	cmd_mount
+	msg "Updating chroot packages..."
+	unshare -u chroot "$CHROOT" /bin/sh -c \
+		"hostname slitaz; tazpkg recharge && tazpkg upgrade"
+	cmd_umount
+	success "Chroot updated."
+}
+
 cmd_clean() {
 	rm -rf "$CACHE"/* "$LOG"/*
 	success "Cache and logs cleaned."
@@ -353,6 +378,132 @@ cmd_status() {
 	else
 		echo "Repos:     none (run: tazlab clone)"
 	fi
+}
+
+# --- Maintenance ------------------------------------------------------
+
+cmd_check() {
+	err=0
+	missing=""
+	_check() {
+		command -v "$1" >/dev/null 2>&1 && return 0
+		missing="$missing $1"
+		err=1
+	}
+
+	_check wget
+	_check cpio
+	_check mount
+	_check hg
+	_check unlzma
+	_check zcat
+	_check xzcat
+	_check mountpoint
+	_check stat
+	_check od
+	_check unshare
+	_check getent
+	_check awk
+	_check chroot
+	_check sudo
+	_check mktemp
+
+	# Qemu is optional.
+	command -v qemu-system-x86_64 >/dev/null 2>&1 \
+		|| command -v qemu-system-i386 >/dev/null 2>&1 \
+		|| warn "qemu not found (optional, needed for 'tazlab qemu')"
+
+	if [ -n "$missing" ]; then
+		warn "Missing host dependencies:$missing"
+		# Distro hint.
+		if [ -f /etc/os-release ]; then
+			. /etc/os-release
+			case "$ID" in
+				debian|ubuntu)
+					echo "  Install with: sudo apt install$missing" ;;
+				arch|manjaro)
+					echo "  Install with: sudo pacman -S$missing" ;;
+				fedora)
+					echo "  Install with: sudo dnf install$missing" ;;
+			esac
+		fi
+		return 1
+	fi
+	success "All host dependencies found."
+}
+
+cmd_config() {
+	msg "TazLab v$VERSION configuration"
+	echo "SLITAZ_HOME = $SLITAZ_HOME"
+	echo "CHROOT      = $CHROOT"
+	echo "ISO_URL     = $ISO_URL"
+	echo "BUILDER     = $BUILDER"
+	echo "WOK         = $WOK"
+	echo "PACKAGES    = $PACKAGES"
+	echo "CACHE       = $CACHE"
+	echo "LOG         = $LOG"
+	echo "SRC         = $SRC"
+	echo "REPOS       = $REPOS"
+	echo "REPOS_LIST  = $REPOS_LIST"
+	echo "HG_BASE     = $HG_BASE"
+	echo "QEMU_MEM    = $QEMU_MEM"
+	echo "QEMU_SMP    = $QEMU_SMP"
+	echo "QEMU_ARGS   = $QEMU_ARGS"
+	echo "---"
+	msg "Config files loaded (last wins):"
+	[ -r /etc/slitaz/tazlab.conf ]    && echo "  /etc/slitaz/tazlab.conf"
+	[ -r "$HOME/.slitaz/tazlab.conf" ] && echo "  $HOME/.slitaz/tazlab.conf"
+	[ -r ./tazlab.conf ]              && echo "  ./tazlab.conf"
+}
+
+cmd_init() {
+	conf="$HOME/.slitaz/tazlab.conf"
+	if [ -f "$conf" ]; then
+		warn "Config already exists: $conf"
+		msg "Delete it first if you want to recreate."
+		exit 1
+	fi
+
+	msg "╭─ TazLab first-time setup ───────────╮"
+
+	printf "SLITAZ_HOME [%s/.slitaz]: " "$HOME"
+	read -r answer
+	: "${answer:=$HOME/.slitaz}"
+	SLITAZ_HOME="$answer"
+
+	printf "Builder user [%s]: " "${SUDO_USER:-$USER}"
+	read -r answer
+	: "${answer:=${SUDO_USER:-$USER}}"
+	BUILDER="$answer"
+
+	printf "Extra repos [cookutils slitaz-base-files slitaz-boot-scripts]: "
+	read -r answer
+	: "${answer:=cookutils slitaz-base-files slitaz-boot-scripts}"
+	REPOS_LIST="$answer"
+
+	printf "Qemu memory [512M]: "
+	read -r answer
+	: "${answer:=512M}"
+	QEMU_MEM="$answer"
+
+	printf "Qemu CPU cores [2]: "
+	read -r answer
+	: "${answer:=2}"
+	QEMU_SMP="$answer"
+
+	mkdir -p "$HOME/.slitaz"
+	cat > "$conf" <<EOF
+# tazlab configuration
+SLITAZ_HOME="$SLITAZ_HOME"
+BUILDER="$BUILDER"
+REPOS_LIST="$REPOS_LIST"
+QEMU_MEM="$QEMU_MEM"
+QEMU_SMP="$QEMU_SMP"
+EOF
+	success "Configuration saved to: $conf"
+	msg "Next steps:"
+	msg "  tazlab clone"
+	msg "  sudo tazlab setup"
 }
 
 # --- Repos ------------------------------------------------------------
@@ -513,32 +664,59 @@ cmd_info() {
 		DEPENDS BUILD_DEPENDS WANTED
 }
 
+cmd_edit() {
+	[ -n "$1" ] || die "usage: tazlab edit <pkg>"
+	receipt="$WOK/$1/receipt"
+	[ -f "$receipt" ] || die "no receipt: $receipt"
+	${EDITOR:-vi} "$receipt"
+}
+
+cmd_deps() {
+	[ -n "$1" ] || die "usage: tazlab deps <pkg>"
+	receipt="$WOK/$1/receipt"
+	[ -f "$receipt" ] || die "no receipt: $receipt"
+	(
+		. "$receipt"
+		msg "${PACKAGE:-$1} ${VERSION:-unknown}"
+		echo "  Build deps:   ${BUILD_DEPENDS:--}"
+		echo "  Runtime deps: ${DEPENDS:--}"
+	)
+}
+
 # --- Dispatch ---------------------------------------------------------
 
 # Auto-elevate for commands that touch mounts, chroot, or hardware.
 case "$1" in
-	setup|setup-user|enter|enter-user|umount|cook|nuke|qemu) need_root "$@" ;;
+	setup|setup-user|enter|enter-user|umount|cook|run|update-chroot|nuke|qemu)
+		need_root "$@" ;;
 esac
 
 case "$1" in
-	setup)       cmd_setup ;;
-	setup-user)  shift; cmd_setup_user "$@" ;;
-	enter)       cmd_enter ;;
-	enter-user)  shift; cmd_enter_user "$@" ;;
-	umount)      cmd_umount ;;
-	cook)        shift; cmd_cook "$@" ;;
-	nuke)        cmd_nuke ;;
-	clone)       cmd_clone ;;
-	pull)        cmd_pull ;;
-	repos)       cmd_repos ;;
-	add-repo)    shift; cmd_add_repo "$@" ;;
-	qemu)        shift; cmd_qemu "$@" ;;
-	log)         shift; cmd_log "$@" ;;
-	list)        shift; cmd_list "$@" ;;
-	search)      shift; cmd_search "$@" ;;
-	info)        shift; cmd_info "$@" ;;
-	clean)       cmd_clean ;;
-	status)      cmd_status ;;
+	setup)         cmd_setup ;;
+	setup-user)    shift; cmd_setup_user "$@" ;;
+	enter)         cmd_enter ;;
+	enter-user)    shift; cmd_enter_user "$@" ;;
+	umount)        cmd_umount ;;
+	cook)          shift; cmd_cook "$@" ;;
+	run)           shift; cmd_run "$@" ;;
+	update-chroot) cmd_update_chroot ;;
+	nuke)          cmd_nuke ;;
+	clone)         cmd_clone ;;
+	pull)          cmd_pull ;;
+	repos)         cmd_repos ;;
+	add-repo)      shift; cmd_add_repo "$@" ;;
+	qemu)          shift; cmd_qemu "$@" ;;
+	log)           shift; cmd_log "$@" ;;
+	list)          shift; cmd_list "$@" ;;
+	search)        shift; cmd_search "$@" ;;
+	info)          shift; cmd_info "$@" ;;
+	edit)          shift; cmd_edit "$@" ;;
+	deps)          shift; cmd_deps "$@" ;;
+	check)         cmd_check ;;
+	config)        cmd_config ;;
+	init)          cmd_init ;;
+	clean)         cmd_clean ;;
+	status)        cmd_status ;;
 	""|help|-h|--help|-v|--version) usage ;;
 	*) die "unknown command: $1 (try: tazlab help)" ;;
 esac
