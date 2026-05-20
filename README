@@ -1,0 +1,57 @@
+tazchroot
+=========
+
+Build SliTaz packages from a foreign GNU/Linux host (Debian, Ubuntu, ...).
+
+POSIX shell, mount + chroot. No proot, no systemd, no extra dependencies
+beyond what every distro already ships.
+
+Install
+-------
+
+    sudo make install
+
+Quick start
+-----------
+
+    sudo tazchroot setup        # download and extract SliTaz rootfs
+    sudo tazchroot enter        # mount and enter the chroot
+
+Inside the chroot, on first use:
+
+    tazpkg get-install cookutils
+    hg clone https://hg.slitaz.org/wok /home/slitaz/wok
+
+Then back on the host:
+
+    sudo tazchroot cook busybox
+
+Layout
+------
+
+By default everything lives in ~/.slitaz/ on the host:
+
+    chroot/      SliTaz rootfs
+    wok/         package recipes (bind-mounted in chroot)
+    packages/    built .tazpkg files
+    cache/       build cache
+    log/         build logs
+    src/         source tarballs
+
+Override via /etc/slitaz/tazchroot.conf, ~/.slitaz/tazchroot.conf, or
+./tazchroot.conf (last wins).
+
+Commands
+--------
+
+    setup        Download SliTaz rootfs and prepare chroot
+    enter        Mount and enter the chroot
+    umount       Unmount the chroot
+    cook <pkg>   Cook a package inside the chroot
+    clean        Clean cache and build logs
+    status       Show chroot status
+
+Notes
+-----
+
+A chroot is not a security boundary. Do not run untrusted package recipes.

@@ -1,0 +1,330 @@
+#!/bin/sh
+# tazchroot - Build SliTaz packages from a foreign host (Debian, Ubuntu...)
+#
+# Copyright (C) 2026 SliTaz GNU/Linux - BSD License
+# Author: Christophe Lincoln <pankso@slitaz.org>
+#
+
+VERSION="0.1"
+
+# Resolve the calling user when invoked via sudo, so state lives in their
+# home (~/.slitaz) rather than /root/.slitaz.
+if [ -n "$SUDO_USER" ] && [ "$(id -u)" -eq 0 ]; then
+	REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+	[ -n "$REAL_HOME" ] && HOME="$REAL_HOME"
+fi
+
+# Load config: /etc, then user, then cwd (last wins).
+[ -r /etc/slitaz/tazchroot.conf ] && . /etc/slitaz/tazchroot.conf
+[ -r "$HOME/.slitaz/tazchroot.conf" ] && . "$HOME/.slitaz/tazchroot.conf"
+[ -r ./tazchroot.conf ] && . ./tazchroot.conf
+
+: ${SLITAZ_HOME:=$HOME/.slitaz}
+: ${CHROOT:=$SLITAZ_HOME/chroot}
+: ${ISO_URL:=https://people.slitaz.org/~shann/slitaz-current64-stuff/slitaz-current64-core64-grub2.iso}
+
+# Default unprivileged user for `enter-user` / `setup-user`. Falls back to
+# $SUDO_USER (the host user that invoked sudo), then $USER. Override in
+# tazchroot.conf with BUILDER="someone".
+: ${BUILDER:=${SUDO_USER:-$USER}}
+
+WOK="$SLITAZ_HOME/wok"
+PACKAGES="$SLITAZ_HOME/packages"
+CACHE="$SLITAZ_HOME/cache"
+LOG="$SLITAZ_HOME/log"
+SRC="$SLITAZ_HOME/src"
+REPOS="$SLITAZ_HOME/repos"
+
+usage() {
+	cat <<EOF
+Usage: tazchroot <command> [args]
+
+Commands:
+    setup            Download SliTaz ISO and extract rootfs to chroot
+    setup-user [u]   Create an unprivileged user in the chroot (default: $BUILDER)
+    enter            Mount and enter the chroot as root
+    enter-user [u]   Mount and enter the chroot as an unprivileged user
+    umount           Unmount the chroot
+    cook <pkg>       Cook a package inside the chroot (root)
+    clean            Clean cache and build logs
+    nuke             Wipe the chroot (keeps wok/packages/cache/log/src/repos/iso)
+    status           Show chroot status
+
+Commands that touch the chroot or mounts auto-elevate via sudo.
+Builder user (current default): $BUILDER
+
+Config: /etc/slitaz/tazchroot.conf, ~/.slitaz/tazchroot.conf, ./tazchroot.conf
+Chroot: $CHROOT
+
+tazchroot $VERSION - SliTaz GNU/Linux
+EOF
+}
+
+die() {
+	echo "Error: $*" >&2
+	exit 1
+}
+
+need_root() {
+	[ "$(id -u)" -eq 0 ] && return 0
+	command -v sudo >/dev/null 2>&1 \
+		|| die "this command needs root and sudo is not installed"
+	exec sudo "$0" "$@"
+}
+
+is_mounted() {
+	mountpoint -q "$CHROOT/$1" 2>/dev/null
+}
+
+# Decompress to stdout, auto-detecting format from magic bytes.
+# SliTaz keeps the .gz extension for legacy reasons but actually uses lzma.
+# stderr is dropped: initramfs streams often have trailing padding that
+# triggers cosmetic "corrupted data" warnings; cpio + the post-extract
+# sanity check are the real correctness gates.
+decomp() {
+	magic=$(od -An -N6 -tx1 "$1" 2>/dev/null | tr -d ' \n')
+	case "$magic" in
+		1f8b*)        zcat       "$1" 2>/dev/null ;;
+		fd377a585a00) xzcat      "$1" 2>/dev/null ;;
+		5d00*)        unlzma -c  "$1" 2>/dev/null ;;
+		*)            cat        "$1" ;;
+	esac
+}
+
+# --- Commands ---------------------------------------------------------
+
+cmd_setup() {
+	[ -d "$CHROOT/bin" ] && die "chroot already set up at: $CHROOT"
+	mkdir -p "$CHROOT" "$WOK" "$PACKAGES" "$CACHE" "$LOG" "$SRC" \
+		"$REPOS" "$SLITAZ_HOME/iso"
+	iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
+	if [ ! -f "$iso" ]; then
+		echo "Downloading ISO: $ISO_URL"
+		wget -O "$iso" "$ISO_URL" || die "ISO download failed"
+	else
+		echo "Using cached ISO: $iso"
+	fi
+	mnt=$(mktemp -d) || die "mktemp failed"
+	mount -o loop,ro "$iso" "$mnt" || { rmdir "$mnt"; die "ISO mount failed"; }
+	# SliTaz ISO: single boot/rootfs.gz, or layered rootfs[1-4].gz.
+	if [ -f "$mnt/boot/rootfs.gz" ]; then
+		layers="$mnt/boot/rootfs.gz"
+	else
+		layers=$(ls "$mnt"/boot/rootfs?.gz 2>/dev/null | sort)
+	fi
+	[ -n "$layers" ] || {
+		umount "$mnt"; rmdir "$mnt"; die "no rootfs found in ISO"
+	}
+	echo "Extracting rootfs to: $CHROOT"
+	for l in $layers; do echo "  layer: $l ($(stat -c%s "$l") bytes)"; done
+	( cd "$CHROOT" && for l in $layers; do decomp "$l"; done \
+		| cpio -idmu --quiet ) \
+		|| { umount "$mnt"; rmdir "$mnt"; die "rootfs extraction failed"; }
+	umount "$mnt" && rmdir "$mnt"
+	[ -x "$CHROOT/bin/sh" ] || die "extracted chroot looks broken (no /bin/sh)"
+	echo slitaz > "$CHROOT/etc/hostname"
+	# Make host-shared dirs owned by the calling user so recipes can be
+	# edited without sudo. Chroot itself stays root-owned.
+	if [ -n "$SUDO_USER" ]; then
+		chown "$SUDO_USER": "$SLITAZ_HOME" "$WOK" "$PACKAGES" "$CACHE" \
+			"$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
+	fi
+	echo "Done. Run: sudo tazchroot enter"
+}
+
+cmd_mount() {
+	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazchroot setup"
+	is_mounted proc    || mount -t proc  proc "$CHROOT/proc"
+	is_mounted sys     || mount -t sysfs sys  "$CHROOT/sys"
+	is_mounted dev     || mount --bind /dev     "$CHROOT/dev"
+	is_mounted dev/pts || mount --bind /dev/pts "$CHROOT/dev/pts"
+	# Bind shared dirs so builds persist on the host.
+	mkdir -p "$REPOS"
+	if [ -n "$SUDO_USER" ]; then
+		chown "$SUDO_USER": "$REPOS" 2>/dev/null
+	fi
+	mkdir -p "$CHROOT/home/slitaz/wok" \
+		"$CHROOT/home/slitaz/packages" \
+		"$CHROOT/home/slitaz/cache" \
+		"$CHROOT/home/slitaz/log" \
+		"$CHROOT/home/slitaz/src" \
+		"$CHROOT/home/slitaz/repos"
+	is_mounted home/slitaz/wok      || mount --bind "$WOK"      "$CHROOT/home/slitaz/wok"
+	is_mounted home/slitaz/packages || mount --bind "$PACKAGES" "$CHROOT/home/slitaz/packages"
+	is_mounted home/slitaz/cache    || mount --bind "$CACHE"    "$CHROOT/home/slitaz/cache"
+	is_mounted home/slitaz/log      || mount --bind "$LOG"      "$CHROOT/home/slitaz/log"
+	is_mounted home/slitaz/src      || mount --bind "$SRC"      "$CHROOT/home/slitaz/src"
+	is_mounted home/slitaz/repos || mount --bind "$REPOS" "$CHROOT/home/slitaz/repos"
+	cp -L /etc/resolv.conf "$CHROOT/etc/resolv.conf"
+}
+
+cmd_umount() {
+	for m in 	home/slitaz/repos home/slitaz/src home/slitaz/log \
+		home/slitaz/cache home/slitaz/packages home/slitaz/wok \
+		dev/pts dev sys proc; do
+		is_mounted "$m" && umount "$CHROOT/$m"
+	done
+	echo "Chroot unmounted."
+}
+
+cmd_enter() {
+	cmd_mount
+	unshare -u chroot "$CHROOT" /bin/sh -c \
+		'hostname slitaz; exec /bin/sh -l'
+	cmd_umount
+}
+
+# Resolve a user name to a numeric UID from the *host* /etc/passwd. The chroot
+# will be configured to use the same UID so bind-mounted files keep consistent
+# ownership across host and chroot.
+_host_uid() {
+	getent passwd "$1" 2>/dev/null | cut -d: -f3
+}
+
+cmd_setup_user() {
+	hint="${1:-$BUILDER}"
+	[ -n "$hint" ] || die "no user specified and BUILDER is empty"
+	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazchroot setup"
+	uid=$(_host_uid "$hint")
+	[ -n "$uid" ] || die "user not found on host: $hint"
+
+	# If something already owns this UID inside the chroot, reuse it instead
+	# of failing. Typical case: `cook setup` created a `slitaz` user at the
+	# same UID. Bind-mounts map by UID, so files written by that user will
+	# still appear as `$hint:$hint` on the host.
+	existing=$(awk -F: -v u="$uid" '$3==u {print $1; exit}' "$CHROOT/etc/passwd" 2>/dev/null)
+
+	if [ -n "$existing" ]; then
+		user="$existing"
+		echo "User '$user' already owns uid=$uid in chroot; reusing it."
+	else
+		user="$hint"
+		# If GID $uid is already taken by a group (typical: `cook setup`
+		# creates `slitaz` at GID 1000 without any user), reuse it as the
+		# primary group instead of letting adduser try to recreate it.
+		gname=$(awk -F: -v g="$uid" '$3==g {print $1; exit}' \
+			"$CHROOT/etc/group" 2>/dev/null)
+		if [ -n "$gname" ]; then
+			echo "Creating '$user' in chroot with uid=$uid (primary group: $gname, gid=$uid)..."
+			chroot "$CHROOT" /bin/sh -c \
+				"adduser -u $uid -G $gname -D -H -h /home/$user -s /bin/sh $user" \
+				|| die "adduser failed in chroot"
+			mkdir -p "$CHROOT/home/$user"
+			chroot "$CHROOT" chown "$user:$gname" "/home/$user"
+		else
+			echo "Creating '$user' in chroot with uid=$uid..."
+			# BusyBox adduser auto-creates a primary group with the same
+			# name and matching GID.
+			chroot "$CHROOT" /bin/sh -c \
+				"adduser -u $uid -D -h /home/$user -s /bin/sh $user" \
+				|| die "adduser failed in chroot"
+		fi
+	fi
+
+	# Wheel membership + passwordless sudo (chroot is a dev sandbox).
+	grep -q '^wheel:' "$CHROOT/etc/group" 2>/dev/null \
+		|| echo "wheel:x:10:" >> "$CHROOT/etc/group"
+	if ! awk -F: -v u="$user" '$1=="wheel" {print $4}' "$CHROOT/etc/group" \
+		| tr ',' '\n' | grep -qx "$user"; then
+		chroot "$CHROOT" /bin/sh -c "addgroup $user wheel" \
+			|| die "addgroup $user wheel failed"
+	fi
+
+	if [ -f "$CHROOT/etc/sudoers" ]; then
+		if ! grep -qE '^%wheel[[:space:]]+ALL=' "$CHROOT/etc/sudoers"; then
+			echo '%wheel ALL=(ALL) NOPASSWD: ALL' >> "$CHROOT/etc/sudoers"
+		fi
+	else
+		mkdir -p "$CHROOT/etc"
+		printf 'root ALL=(ALL) ALL\n%%wheel ALL=(ALL) NOPASSWD: ALL\n' \
+			> "$CHROOT/etc/sudoers"
+		chmod 0440 "$CHROOT/etc/sudoers"
+	fi
+
+	# Resolve the user's actual primary group (may be `slitaz` if we reused it).
+	pgid=$(awk -F: -v u="$user" '$1==u {print $4; exit}' "$CHROOT/etc/passwd")
+	pgroup=$(awk -F: -v g="$pgid" '$3==g {print $1; exit}' "$CHROOT/etc/group")
+	: "${pgroup:=$user}"
+
+	mkdir -p "$CHROOT/home/$user"
+	chroot "$CHROOT" chown -R "$user:$pgroup" "/home/$user"
+	echo "Done. Enter as this user with: tazchroot enter-user $user"
+}
+
+cmd_enter_user() {
+	user="$1"
+	if [ -z "$user" ]; then
+		# Auto-resolve: find the chroot user whose UID matches $BUILDER on
+		# the host (so `cook setup`'s `slitaz` is picked up automatically).
+		[ -n "$BUILDER" ] || die "no user specified and BUILDER is empty"
+		uid=$(_host_uid "$BUILDER")
+		[ -n "$uid" ] || die "user not found on host: $BUILDER"
+		user=$(awk -F: -v u="$uid" '$3==u {print $1; exit}' \
+			"$CHROOT/etc/passwd" 2>/dev/null)
+		[ -n "$user" ] \
+			|| die "no chroot user at uid=$uid. Run: tazchroot setup-user"
+	fi
+	grep -q "^$user:" "$CHROOT/etc/passwd" 2>/dev/null \
+		|| die "user '$user' not in chroot. Run: tazchroot setup-user $user"
+	cmd_mount
+	unshare -u chroot "$CHROOT" /bin/sh -c \
+		"hostname slitaz; exec su - $user"
+	cmd_umount
+}
+
+cmd_cook() {
+	[ -n "$1" ] || die "usage: tazchroot cook <pkg>"
+	cmd_mount
+	unshare -u chroot "$CHROOT" /bin/sh -c \
+		"hostname slitaz; cook $1"
+	cmd_umount
+}
+
+cmd_clean() {
+	rm -rf "$CACHE"/* "$LOG"/*
+	echo "Cache and logs cleaned."
+}
+
+cmd_nuke() {
+	cmd_umount 2>/dev/null
+	rm -rf "$CHROOT"
+	echo "Chroot wiped: $CHROOT"
+	echo "Wok, packages, src, cache, log, repos and cached ISO kept."
+	echo "Run: tazchroot setup"
+}
+
+cmd_status() {
+	echo "Chroot:    $CHROOT"
+	if [ -d "$CHROOT/bin" ]; then
+		echo "Size:      $(du -sh "$CHROOT" 2>/dev/null | cut -f1)"
+		echo "Mounted:   $(mount | grep -c " $CHROOT")"
+	else
+		echo "Status:    not set up (run: tazchroot setup)"
+		return
+	fi
+	echo "Wok:       $(ls "$WOK" 2>/dev/null | wc -l) recipes"
+	echo "Packages:  $(ls "$PACKAGES"/*.tazpkg 2>/dev/null | wc -l)"
+	echo "Cache:     $(du -sh "$CACHE" 2>/dev/null | cut -f1)"
+	echo "Repos:     $(ls "$REPOS" 2>/dev/null | wc -l) dirs"
+}
+
+# --- Dispatch ---------------------------------------------------------
+
+# Auto-elevate for commands that touch mounts or the chroot.
+case "$1" in
+	setup|setup-user|enter|enter-user|umount|cook|nuke) need_root "$@" ;;
+esac
+
+case "$1" in
+	setup)       cmd_setup ;;
+	setup-user)  shift; cmd_setup_user "$@" ;;
+	enter)       cmd_enter ;;
+	enter-user)  shift; cmd_enter_user "$@" ;;
+	umount)      cmd_umount ;;
+	cook)        shift; cmd_cook "$@" ;;
+	clean)       cmd_clean ;;
+	nuke)        cmd_nuke ;;
+	status)      cmd_status ;;
+	""|help|-h|--help|-v|--version) usage ;;
+	*) die "unknown command: $1 (try: tazchroot help)" ;;
+esac
