@@ -33,13 +33,14 @@ sudo tazlab enter           # Mount and enter the chroot
 Inside the chroot, on first use, install the cooking tools:
 ```bash
 tazpkg get-install cookutils
+cook setup
 ```
 
 ### 4. Cook and Test
-Back on your host, you can now build packages and test them:
+Back on your host, you can now build packages. If you build custom SliTaz ISOs (e.g. using `tazlito`), you can quickly test them:
 ```bash
-sudo tazlab cook busybox
-sudo tazlab qemu            # Test your build in QEMU
+sudo tazlab cook busybox      # Cook a package
+sudo tazlab qemu              # Test your SliTaz ISO in QEMU
 ```
 
 ---
