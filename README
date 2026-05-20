@@ -14,7 +14,7 @@ Install
 Quick start
 -----------
 
-    sudo tazlab clone           # clone wok + essential repos
+    tazlab clone                # clone wok + essential repos
     sudo tazlab setup           # download and extract SliTaz rootfs
     sudo tazlab enter           # mount and enter the chroot
 
