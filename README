@@ -1,10 +1,10 @@
-tazchroot
-=========
+tazlab
+======
 
-Build SliTaz packages from a foreign GNU/Linux host (Debian, Ubuntu, ...).
+SliTaz development lab for foreign GNU/Linux hosts (Debian, Ubuntu, ...).
 
-POSIX shell, mount + chroot. No proot, no systemd, no extra dependencies
-beyond what every distro already ships.
+POSIX shell, mount + chroot + qemu. No proot, no systemd, no extra
+dependencies beyond what every distro already ships.
 
 Install
 -------
@@ -14,17 +14,18 @@ Install
 Quick start
 -----------
 
-    sudo tazchroot setup        # download and extract SliTaz rootfs
-    sudo tazchroot enter        # mount and enter the chroot
+    sudo tazlab clone           # clone wok + essential repos
+    sudo tazlab setup           # download and extract SliTaz rootfs
+    sudo tazlab enter           # mount and enter the chroot
 
 Inside the chroot, on first use:
 
     tazpkg get-install cookutils
-    hg clone https://hg.slitaz.org/wok /home/slitaz/wok
 
 Then back on the host:
 
-    sudo tazchroot cook busybox
+    sudo tazlab cook busybox
+    sudo tazlab qemu            # test in Qemu
 
 Layout
 ------
@@ -33,23 +34,46 @@ By default everything lives in ~/.slitaz/ on the host:
 
     chroot/      SliTaz rootfs
     wok/         package recipes (bind-mounted in chroot)
+    repos/       cloned HG repos (cookutils, base-files, ...)
     packages/    built .tazpkg files
     cache/       build cache
     log/         build logs
     src/         source tarballs
+    iso/         cached SliTaz ISO images
 
-Override via /etc/slitaz/tazchroot.conf, ~/.slitaz/tazchroot.conf, or
-./tazchroot.conf (last wins).
+Override via /etc/slitaz/tazlab.conf, ~/.slitaz/tazlab.conf, or
+./tazlab.conf (last wins).
 
 Commands
 --------
 
-    setup        Download SliTaz rootfs and prepare chroot
-    enter        Mount and enter the chroot
-    umount       Unmount the chroot
-    cook <pkg>   Cook a package inside the chroot
-    clean        Clean cache and build logs
-    status       Show chroot status
+  Chroot:
+    setup            Download SliTaz ISO and extract rootfs to chroot
+    setup-user [u]   Create an unprivileged user in the chroot
+    enter            Mount and enter the chroot as root
+    enter-user [u]   Mount and enter as an unprivileged user
+    umount           Unmount the chroot
+    cook <pkg>       Cook a package inside the chroot
+    nuke             Wipe the chroot
+
+  Repos:
+    clone            Clone wok + extra repos into ~/.slitaz/repos/
+    pull             hg pull -u on all cloned repos
+    repos            Show status of each cloned repo
+    add-repo <url>   Add an extra HG repo to the list
+
+  Qemu:
+    qemu [iso]       Run SliTaz ISO in Qemu (-iso <url> to download)
+
+  Inspect:
+    log <pkg>        Show build log (tail -f if building)
+    list [filter]    List package recipes in the wok
+    search <pat>     Search for a pattern in all receipts
+    info <pkg>       Show package receipt
+
+  Maintenance:
+    status           Show chroot, wok, packages, repos status
+    clean            Clean cache and build logs
 
 Notes
 -----

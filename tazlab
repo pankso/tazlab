@@ -1,11 +1,11 @@
 #!/bin/sh
-# tazchroot - Build SliTaz packages from a foreign host (Debian, Ubuntu...)
+# tazlab - SliTaz development lab for foreign hosts (Debian, Ubuntu...)
 #
 # Copyright (C) 2026 SliTaz GNU/Linux - BSD License
 # Author: Christophe Lincoln <pankso@slitaz.org>
 #
 
-VERSION="0.1"
+VERSION="0.2"
 
 # Resolve the calling user when invoked via sudo, so state lives in their
 # home (~/.slitaz) rather than /root/.slitaz.
@@ -15,9 +15,9 @@ if [ -n "$SUDO_USER" ] && [ "$(id -u)" -eq 0 ]; then
 fi
 
 # Load config: /etc, then user, then cwd (last wins).
-[ -r /etc/slitaz/tazchroot.conf ] && . /etc/slitaz/tazchroot.conf
-[ -r "$HOME/.slitaz/tazchroot.conf" ] && . "$HOME/.slitaz/tazchroot.conf"
-[ -r ./tazchroot.conf ] && . ./tazchroot.conf
+[ -r /etc/slitaz/tazlab.conf ]    && . /etc/slitaz/tazlab.conf
+[ -r "$HOME/.slitaz/tazlab.conf" ] && . "$HOME/.slitaz/tazlab.conf"
+[ -r ./tazlab.conf ]              && . ./tazlab.conf
 
 : ${SLITAZ_HOME:=$HOME/.slitaz}
 : ${CHROOT:=$SLITAZ_HOME/chroot}
@@ -25,8 +25,18 @@ fi
 
 # Default unprivileged user for `enter-user` / `setup-user`. Falls back to
 # $SUDO_USER (the host user that invoked sudo), then $USER. Override in
-# tazchroot.conf with BUILDER="someone".
+# tazlab.conf with BUILDER="someone".
 : ${BUILDER:=${SUDO_USER:-$USER}}
+
+# HG repos to clone into ~/.slitaz/repos/ (space-separated). Wok is always
+# cloned by default.
+: ${REPOS_LIST:=cookutils slitaz-base-files slitaz-boot-scripts}
+: ${HG_BASE:=https://hg.slitaz.org}
+
+# Qemu defaults (overridable in tazlab.conf).
+: ${QEMU_MEM:=512M}
+: ${QEMU_SMP:=2}
+: ${QEMU_ARGS:=-net nic -net user}
 
 WOK="$SLITAZ_HOME/wok"
 PACKAGES="$SLITAZ_HOME/packages"
@@ -37,7 +47,7 @@ REPOS="$SLITAZ_HOME/repos"
 
 usage() {
 	cat <<EOF
-Usage: tazchroot <command> [args]
+Usage: tazlab <command> [args]
 
 Commands:
     setup            Download SliTaz ISO and extract rootfs to chroot
@@ -46,17 +56,34 @@ Commands:
     enter-user [u]   Mount and enter the chroot as an unprivileged user
     umount           Unmount the chroot
     cook <pkg>       Cook a package inside the chroot (root)
-    clean            Clean cache and build logs
     nuke             Wipe the chroot (keeps wok/packages/cache/log/src/repos/iso)
-    status           Show chroot status
+    status           Show chroot, wok, packages, repos status
+
+  Repos:
+    clone            Clone wok + extra repos (REPOS_LIST) into ~/.slitaz/repos/
+    pull             hg pull -u on all cloned repos
+    repos            Show status of each cloned repo
+    add-repo <url>   Add an extra HG repo to REPOS_LIST in tazlab.conf
+
+  Qemu:
+    qemu [iso]       Run SliTaz ISO in Qemu (-iso <url> to download first)
+
+  Inspect:
+    log <pkg>        Show build log (or tail -f if building)
+    list [filter]    List package recipes in the wok
+    search <pat>     Search for a pattern in all receipts
+    info <pkg>       Show package receipt (version, deps, desc...)
+
+  Maintenance:
+    clean            Clean cache and build logs
 
 Commands that touch the chroot or mounts auto-elevate via sudo.
 Builder user (current default): $BUILDER
 
-Config: /etc/slitaz/tazchroot.conf, ~/.slitaz/tazchroot.conf, ./tazchroot.conf
+Config: /etc/slitaz/tazlab.conf, ~/.slitaz/tazlab.conf, ./tazlab.conf
 Chroot: $CHROOT
 
-tazchroot $VERSION - SliTaz GNU/Linux
+tazlab $VERSION - SliTaz GNU/Linux
 EOF
 }
 
@@ -129,11 +156,11 @@ cmd_setup() {
 		chown "$SUDO_USER": "$SLITAZ_HOME" "$WOK" "$PACKAGES" "$CACHE" \
 			"$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
 	fi
-	echo "Done. Run: sudo tazchroot enter"
+	echo "Done. Run: sudo tazlab enter"
 }
 
 cmd_mount() {
-	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazchroot setup"
+	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup"
 	is_mounted proc    || mount -t proc  proc "$CHROOT/proc"
 	is_mounted sys     || mount -t sysfs sys  "$CHROOT/sys"
 	is_mounted dev     || mount --bind /dev     "$CHROOT/dev"
@@ -184,7 +211,7 @@ _host_uid() {
 cmd_setup_user() {
 	hint="${1:-$BUILDER}"
 	[ -n "$hint" ] || die "no user specified and BUILDER is empty"
-	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazchroot setup"
+	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup"
 	uid=$(_host_uid "$hint")
 	[ -n "$uid" ] || die "user not found on host: $hint"
 
@@ -248,7 +275,7 @@ cmd_setup_user() {
 
 	mkdir -p "$CHROOT/home/$user"
 	chroot "$CHROOT" chown -R "$user:$pgroup" "/home/$user"
-	echo "Done. Enter as this user with: tazchroot enter-user $user"
+	echo "Done. Enter as this user with: tazlab enter-user $user"
 }
 
 cmd_enter_user() {
@@ -262,10 +289,10 @@ cmd_enter_user() {
 		user=$(awk -F: -v u="$uid" '$3==u {print $1; exit}' \
 			"$CHROOT/etc/passwd" 2>/dev/null)
 		[ -n "$user" ] \
-			|| die "no chroot user at uid=$uid. Run: tazchroot setup-user"
+			|| die "no chroot user at uid=$uid. Run: tazlab setup-user"
 	fi
 	grep -q "^$user:" "$CHROOT/etc/passwd" 2>/dev/null \
-		|| die "user '$user' not in chroot. Run: tazchroot setup-user $user"
+		|| die "user '$user' not in chroot. Run: tazlab setup-user $user"
 	cmd_mount
 	unshare -u chroot "$CHROOT" /bin/sh -c \
 		"hostname slitaz; exec su - $user"
@@ -273,7 +300,7 @@ cmd_enter_user() {
 }
 
 cmd_cook() {
-	[ -n "$1" ] || die "usage: tazchroot cook <pkg>"
+	[ -n "$1" ] || die "usage: tazlab cook <pkg>"
 	cmd_mount
 	unshare -u chroot "$CHROOT" /bin/sh -c \
 		"hostname slitaz; cook $1"
@@ -290,7 +317,7 @@ cmd_nuke() {
 	rm -rf "$CHROOT"
 	echo "Chroot wiped: $CHROOT"
 	echo "Wok, packages, src, cache, log, repos and cached ISO kept."
-	echo "Run: tazchroot setup"
+	echo "Run: tazlab setup"
 }
 
 cmd_status() {
@@ -299,20 +326,190 @@ cmd_status() {
 		echo "Size:      $(du -sh "$CHROOT" 2>/dev/null | cut -f1)"
 		echo "Mounted:   $(mount | grep -c " $CHROOT")"
 	else
-		echo "Status:    not set up (run: tazchroot setup)"
+		echo "Status:    not set up (run: tazlab setup)"
 		return
 	fi
 	echo "Wok:       $(ls "$WOK" 2>/dev/null | wc -l) recipes"
 	echo "Packages:  $(ls "$PACKAGES"/*.tazpkg 2>/dev/null | wc -l)"
 	echo "Cache:     $(du -sh "$CACHE" 2>/dev/null | cut -f1)"
-	echo "Repos:     $(ls "$REPOS" 2>/dev/null | wc -l) dirs"
+	echo "ISO:       $(ls "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | wc -l) files"
+	if [ -d "$REPOS" ] && [ -n "$(ls "$REPOS" 2>/dev/null)" ]; then
+		echo "Repos:"
+		for r in "$REPOS"/*; do
+			[ -d "$r/.hg" ] || continue
+			name=$(basename "$r")
+			branch=$(hg -R "$r" branch 2>/dev/null)
+			rev=$(hg -R "$r" log -l1 --template '{rev}:{node|short}' 2>/dev/null)
+			echo "  $name  $branch  $rev"
+		done
+	else
+		echo "Repos:     none (run: tazlab clone)"
+	fi
+}
+
+# --- Repos ------------------------------------------------------------
+
+cmd_clone() {
+	mkdir -p "$REPOS"
+	if [ -n "$SUDO_USER" ]; then
+		chown "$SUDO_USER": "$REPOS" 2>/dev/null
+	fi
+
+	_clone_one() {
+		name=$(basename "$1" .hg)
+		[ -d "$REPOS/$name/.hg" ] && {
+			echo "Already cloned: $name (use 'tazlab pull')"
+			return 0
+		}
+		echo "Cloning: $name ($1)"
+		hg clone "$1" "$REPOS/$name" || die "clone failed: $name"
+	}
+
+	# Wok is always cloned.
+	_clone_one "$HG_BASE/wok-current"
+	# Extra repos from config.
+	for r in $REPOS_LIST; do
+		_clone_one "$HG_BASE/$r"
+	done
+	echo "Done. Repos in: $REPOS"
+}
+
+cmd_pull() {
+	[ -d "$REPOS" ] || die "no repos directory. Run: tazlab clone"
+	count=0
+	for r in "$REPOS"/*; do
+		[ -d "$r/.hg" ] || continue
+		name=$(basename "$r")
+		echo "Pulling: $name"
+		hg -R "$r" pull -u || echo "Warning: pull failed for $name" >&2
+		count=$((count + 1))
+	done
+	[ "$count" -gt 0 ] || die "no HG repos found in $REPOS"
+	echo "Done. $count repos pulled."
+}
+
+cmd_repos() {
+	[ -d "$REPOS" ] || die "no repos directory. Run: tazlab clone"
+	for r in "$REPOS"/*; do
+		[ -d "$r/.hg" ] || continue
+		name=$(basename "$r")
+		branch=$(hg -R "$r" branch 2>/dev/null)
+		rev=$(hg -R "$r" log -l1 --template '{rev}:{node|short}' 2>/dev/null)
+		age=$(hg -R "$r" log -l1 --template '{date|age}' 2>/dev/null)
+		echo "$name | $branch | $rev | $age"
+	done
+}
+
+cmd_add_repo() {
+	[ -n "$1" ] || die "usage: tazlab add-repo <url>"
+	conf="$HOME/.slitaz/tazlab.conf"
+	touch "$conf"
+	if grep -q "^REPOS_LIST=" "$conf" 2>/dev/null; then
+		if grep -q "$1" "$conf"; then
+			echo "Repo already in REPOS_LIST: $1"
+			return 0
+		fi
+		sed -i "s|^REPOS_LIST=\"|&$1 |" "$conf"
+	else
+		echo "REPOS_LIST=\"$1\"" >> "$conf"
+	fi
+	echo "Added to REPOS_LIST: $1"
+	echo "Run: tazlab clone"
+}
+
+# --- Qemu --------------------------------------------------------------
+
+cmd_qemu() {
+	iso="$1"
+	if [ -n "$iso" ] && [ "${iso#--iso=}" != "$iso" ]; then
+		url="${iso#--iso=}"
+		iso="$SLITAZ_HOME/iso/$(basename "$url")"
+		mkdir -p "$SLITAZ_HOME/iso"
+		if [ ! -f "$iso" ]; then
+			echo "Downloading ISO: $url"
+			wget -O "$iso" "$url" || die "download failed"
+		fi
+	elif [ -z "$iso" ]; then
+		# Auto-detect latest ISO.
+		iso=$(ls -t "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | head -1)
+		[ -n "$iso" ] || die "no ISO found in $SLITAZ_HOME/iso/"
+	fi
+	echo "ISO: $iso"
+
+	qemu_bin="qemu-system-x86_64"
+	command -v "$qemu_bin" >/dev/null 2>&1 \
+		|| qemu_bin="qemu-system-i386"
+	command -v "$qemu_bin" >/dev/null 2>&1 \
+		|| die "qemu not found (install qemu-system-x86)"
+
+	set -- -m "$QEMU_MEM" -smp "$QEMU_SMP" $QEMU_ARGS -cdrom "$iso"
+	if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+		set -- -enable-kvm "$@"
+	fi
+	echo "Running: $qemu_bin $*"
+	exec "$qemu_bin" "$@"
+}
+
+# --- Inspect -----------------------------------------------------------
+
+# Shell wrapper: source a receipt and print its variables.
+_show_receipt() {
+	receipt="$1"
+	shift
+	[ -f "$receipt" ] || die "no receipt: $receipt"
+	( . "$receipt"
+	  for var in "$@"; do
+		  eval "echo \"$var: \$$var\""
+	  done
+	)
+}
+
+cmd_log() {
+	[ -n "$1" ] || die "usage: tazlab log <pkg>"
+	logf="$LOG/$1.log"
+	if [ -f "$logf" ]; then
+		if [ -r "$CACHE/$1.lock" ] 2>/dev/null; then
+			tail -f "$logf"
+		else
+			cat "$logf"
+		fi
+	else
+		echo "No build log for: $1"
+		echo "Run: tazlab cook $1"
+	fi
+}
+
+cmd_list() {
+	[ -d "$WOK" ] || die "no wok. Run: tazlab clone"
+	ls "$WOK" ${1:+"$WOK/$1*"} 2>/dev/null | while read -r d; do
+		[ -f "$d/receipt" ] || continue
+		basename "$d"
+	done
+}
+
+cmd_search() {
+	[ -n "$1" ] || die "usage: tazlab search <pattern>"
+	[ -d "$WOK" ] || die "no wok. Run: tazlab clone"
+	grep -rl "$1" "$WOK"/*/receipt 2>/dev/null | while read -r r; do
+		pkg=$(basename "$(dirname "$r")")
+		desc=$(awk -F\" '/^SHORT_DESC=/{print $2; exit}' "$r")
+		echo "$pkg - $desc"
+	done
+}
+
+cmd_info() {
+	[ -n "$1" ] || die "usage: tazlab info <pkg>"
+	receipt="$WOK/$1/receipt"
+	_show_receipt "$receipt" \
+		PACKAGE VERSION CATEGORY SHORT_DESC WEB_SITE MAINTAINER \
+		DEPENDS BUILD_DEPENDS WANTED
 }
 
 # --- Dispatch ---------------------------------------------------------
 
-# Auto-elevate for commands that touch mounts or the chroot.
+# Auto-elevate for commands that touch mounts, chroot, or hardware.
 case "$1" in
-	setup|setup-user|enter|enter-user|umount|cook|nuke) need_root "$@" ;;
+	setup|setup-user|enter|enter-user|umount|cook|nuke|qemu) need_root "$@" ;;
 esac
 
 case "$1" in
@@ -322,9 +519,18 @@ case "$1" in
 	enter-user)  shift; cmd_enter_user "$@" ;;
 	umount)      cmd_umount ;;
 	cook)        shift; cmd_cook "$@" ;;
-	clean)       cmd_clean ;;
 	nuke)        cmd_nuke ;;
+	clone)       cmd_clone ;;
+	pull)        cmd_pull ;;
+	repos)       cmd_repos ;;
+	add-repo)    shift; cmd_add_repo "$@" ;;
+	qemu)        shift; cmd_qemu "$@" ;;
+	log)         shift; cmd_log "$@" ;;
+	list)        shift; cmd_list "$@" ;;
+	search)      shift; cmd_search "$@" ;;
+	info)        shift; cmd_info "$@" ;;
+	clean)       cmd_clean ;;
 	status)      cmd_status ;;
 	""|help|-h|--help|-v|--version) usage ;;
-	*) die "unknown command: $1 (try: tazchroot help)" ;;
+	*) die "unknown command: $1 (try: tazlab help)" ;;
 esac
