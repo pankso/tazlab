@@ -7,6 +7,19 @@
 
 VERSION="0.2"
 
+# --- UI & Colors ---
+C_RED='\033[1;31m'
+C_GREEN='\033[1;32m'
+C_YELLOW='\033[1;33m'
+C_BLUE='\033[1;34m'
+C_CYAN='\033[1;36m'
+C_NONE='\033[0m'
+
+msg()     { echo -e "${C_BLUE}::${C_NONE} $*"; }
+success() { echo -e " ${C_GREEN}✓${C_NONE} $*"; }
+warn()    { echo -e " ${C_YELLOW}⚠${C_NONE} $*" >&2; }
+die()     { echo -e " ${C_RED}☠${C_NONE} $*" >&2; exit 1; }
+
 # Resolve the calling user when invoked via sudo, so state lives in their
 # home (~/.slitaz) rather than /root/.slitaz.
 if [ -n "$SUDO_USER" ] && [ "$(id -u)" -eq 0 ]; then
@@ -87,11 +100,6 @@ tazlab $VERSION - SliTaz GNU/Linux
 EOF
 }
 
-die() {
-	echo "Error: $*" >&2
-	exit 1
-}
-
 need_root() {
 	[ "$(id -u)" -eq 0 ] && return 0
 	command -v sudo >/dev/null 2>&1 \
@@ -126,10 +134,10 @@ cmd_setup() {
 		"$REPOS" "$SLITAZ_HOME/iso"
 	iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
 	if [ ! -f "$iso" ]; then
-		echo "Downloading ISO: $ISO_URL"
+		msg "Downloading ISO: $ISO_URL"
 		wget -O "$iso" "$ISO_URL" || die "ISO download failed"
 	else
-		echo "Using cached ISO: $iso"
+		msg "Using cached ISO: $iso"
 	fi
 	mnt=$(mktemp -d) || die "mktemp failed"
 	mount -o loop,ro "$iso" "$mnt" || { rmdir "$mnt"; die "ISO mount failed"; }
@@ -142,7 +150,7 @@ cmd_setup() {
 	[ -n "$layers" ] || {
 		umount "$mnt"; rmdir "$mnt"; die "no rootfs found in ISO"
 	}
-	echo "Extracting rootfs to: $CHROOT"
+	msg "Extracting rootfs to: $CHROOT"
 	for l in $layers; do echo "  layer: $l ($(stat -c%s "$l") bytes)"; done
 	( cd "$CHROOT" && for l in $layers; do decomp "$l"; done \
 		| cpio -idmu --quiet ) \
@@ -156,7 +164,7 @@ cmd_setup() {
 		chown "$SUDO_USER": "$SLITAZ_HOME" "$WOK" "$PACKAGES" "$CACHE" \
 			"$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
 	fi
-	echo "Done. Run: sudo tazlab enter"
+	success "Done. Run: sudo tazlab enter"
 }
 
 cmd_mount() {
@@ -191,7 +199,7 @@ cmd_umount() {
 		dev/pts dev sys proc; do
 		is_mounted "$m" && umount "$CHROOT/$m"
 	done
-	echo "Chroot unmounted."
+	success "Chroot unmounted."
 }
 
 cmd_enter() {
@@ -223,7 +231,7 @@ cmd_setup_user() {
 
 	if [ -n "$existing" ]; then
 		user="$existing"
-		echo "User '$user' already owns uid=$uid in chroot; reusing it."
+		msg "User '$user' already owns uid=$uid in chroot; reusing it."
 	else
 		user="$hint"
 		# If GID $uid is already taken by a group (typical: `cook setup`
@@ -232,14 +240,14 @@ cmd_setup_user() {
 		gname=$(awk -F: -v g="$uid" '$3==g {print $1; exit}' \
 			"$CHROOT/etc/group" 2>/dev/null)
 		if [ -n "$gname" ]; then
-			echo "Creating '$user' in chroot with uid=$uid (primary group: $gname, gid=$uid)..."
+			msg "Creating '$user' in chroot with uid=$uid (primary group: $gname, gid=$uid)..."
 			chroot "$CHROOT" /bin/sh -c \
 				"adduser -u $uid -G $gname -D -H -h /home/$user -s /bin/sh $user" \
 				|| die "adduser failed in chroot"
 			mkdir -p "$CHROOT/home/$user"
 			chroot "$CHROOT" chown "$user:$gname" "/home/$user"
 		else
-			echo "Creating '$user' in chroot with uid=$uid..."
+			msg "Creating '$user' in chroot with uid=$uid..."
 			# BusyBox adduser auto-creates a primary group with the same
 			# name and matching GID.
 			chroot "$CHROOT" /bin/sh -c \
@@ -275,7 +283,7 @@ cmd_setup_user() {
 
 	mkdir -p "$CHROOT/home/$user"
 	chroot "$CHROOT" chown -R "$user:$pgroup" "/home/$user"
-	echo "Done. Enter as this user with: tazlab enter-user $user"
+	success "Done. Enter as this user with: tazlab enter-user $user"
 }
 
 cmd_enter_user() {
@@ -309,15 +317,15 @@ cmd_cook() {
 
 cmd_clean() {
 	rm -rf "$CACHE"/* "$LOG"/*
-	echo "Cache and logs cleaned."
+	success "Cache and logs cleaned."
 }
 
 cmd_nuke() {
 	cmd_umount 2>/dev/null
 	rm -rf "$CHROOT"
-	echo "Chroot wiped: $CHROOT"
-	echo "Wok, packages, src, cache, log, repos and cached ISO kept."
-	echo "Run: tazlab setup"
+	msg "Chroot wiped: $CHROOT"
+	msg "Wok, packages, src, cache, log, repos and cached ISO kept."
+	msg "Run: tazlab setup"
 }
 
 cmd_status() {
@@ -326,7 +334,7 @@ cmd_status() {
 		echo "Size:      $(du -sh "$CHROOT" 2>/dev/null | cut -f1)"
 		echo "Mounted:   $(mount | grep -c " $CHROOT")"
 	else
-		echo "Status:    not set up (run: tazlab setup)"
+		warn "Status: chroot not set up (run: tazlab setup)"
 		return
 	fi
 	echo "Wok:       $(ls "$WOK" 2>/dev/null | wc -l) recipes"
@@ -358,10 +366,10 @@ cmd_clone() {
 	_clone_one() {
 		name=$(basename "$1" .hg)
 		[ -d "$REPOS/$name/.hg" ] && {
-			echo "Already cloned: $name (use 'tazlab pull')"
+			msg "Already cloned: $name (use 'tazlab pull')"
 			return 0
 		}
-		echo "Cloning: $name ($1)"
+		msg "Cloning: $name ($1)"
 		hg clone "$1" "$REPOS/$name" || die "clone failed: $name"
 	}
 
@@ -371,7 +379,7 @@ cmd_clone() {
 	for r in $REPOS_LIST; do
 		_clone_one "$HG_BASE/$r"
 	done
-	echo "Done. Repos in: $REPOS"
+	success "Done. Repos in: $REPOS"
 }
 
 cmd_pull() {
@@ -380,12 +388,12 @@ cmd_pull() {
 	for r in "$REPOS"/*; do
 		[ -d "$r/.hg" ] || continue
 		name=$(basename "$r")
-		echo "Pulling: $name"
-		hg -R "$r" pull -u || echo "Warning: pull failed for $name" >&2
+		msg "Pulling: $name"
+		hg -R "$r" pull -u || warn "pull failed for $name"
 		count=$((count + 1))
 	done
 	[ "$count" -gt 0 ] || die "no HG repos found in $REPOS"
-	echo "Done. $count repos pulled."
+	success "Done. $count repos pulled."
 }
 
 cmd_repos() {
@@ -406,15 +414,15 @@ cmd_add_repo() {
 	touch "$conf"
 	if grep -q "^REPOS_LIST=" "$conf" 2>/dev/null; then
 		if grep -q "$1" "$conf"; then
-			echo "Repo already in REPOS_LIST: $1"
+			msg "Repo already in REPOS_LIST: $1"
 			return 0
 		fi
 		sed -i "s|^REPOS_LIST=\"|&$1 |" "$conf"
 	else
 		echo "REPOS_LIST=\"$1\"" >> "$conf"
 	fi
-	echo "Added to REPOS_LIST: $1"
-	echo "Run: tazlab clone"
+	success "Added to REPOS_LIST: $1"
+	msg "Run: tazlab clone"
 }
 
 # --- Qemu --------------------------------------------------------------
@@ -426,7 +434,7 @@ cmd_qemu() {
 		iso="$SLITAZ_HOME/iso/$(basename "$url")"
 		mkdir -p "$SLITAZ_HOME/iso"
 		if [ ! -f "$iso" ]; then
-			echo "Downloading ISO: $url"
+			msg "Downloading ISO: $url"
 			wget -O "$iso" "$url" || die "download failed"
 		fi
 	elif [ -z "$iso" ]; then
@@ -434,7 +442,7 @@ cmd_qemu() {
 		iso=$(ls -t "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | head -1)
 		[ -n "$iso" ] || die "no ISO found in $SLITAZ_HOME/iso/"
 	fi
-	echo "ISO: $iso"
+	msg "ISO: $iso"
 
 	qemu_bin="qemu-system-x86_64"
 	command -v "$qemu_bin" >/dev/null 2>&1 \
@@ -446,7 +454,7 @@ cmd_qemu() {
 	if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
 		set -- -enable-kvm "$@"
 	fi
-	echo "Running: $qemu_bin $*"
+	msg "Running: $qemu_bin $*"
 	exec "$qemu_bin" "$@"
 }
 
@@ -474,8 +482,8 @@ cmd_log() {
 			cat "$logf"
 		fi
 	else
-		echo "No build log for: $1"
-		echo "Run: tazlab cook $1"
+		msg "No build log for: $1"
+		msg "Run: tazlab cook $1"
 	fi
 }
 
