@@ -18,14 +18,21 @@ Install the script on your host system:
 sudo make install
 ```
 
-### 2. Setup the Lab
+### 2. Check & Init
+Verify host dependencies and create your configuration:
+```bash
+tazlab check                # Verify all host deps are installed
+tazlab init                 # Interactive setup wizard
+```
+
+### 3. Setup the Lab
 Clone the wok and essential repositories, then download and extract the SliTaz rootfs:
 ```bash
 tazlab clone                # Clone wok + essential repos
 sudo tazlab setup           # Download and extract SliTaz rootfs
 ```
 
-### 3. Enter the Chroot
+### 4. Enter the Chroot
 ```bash
 sudo tazlab enter           # Mount and enter the chroot
 ```
@@ -36,7 +43,7 @@ tazpkg get-install cookutils
 cook setup
 ```
 
-### 4. Cook and Test
+### 5. Cook and Test
 Back on your host, you can now build packages. If you build custom SliTaz ISOs (e.g. using `tazlito`), you can quickly test them:
 ```bash
 sudo tazlab cook busybox      # Cook a package
@@ -73,9 +80,11 @@ TazLab is split into logical command groups. Run `tazlab help` for a quick overv
 - `setup-user [u]` — Create an unprivileged user in the chroot.
 - `enter` — Mount and enter the chroot as `root`.
 - `enter-user [u]` — Mount and enter as an unprivileged user.
-- `umount` — Unmount the chroot.
+- `umount` — Unmount the chroot (skips if another session is active).
 - `cook <pkg>` — Cook a package inside the chroot.
-- `nuke` — Wipe the chroot entirely.
+- `run <cmd>` — Run an arbitrary command inside the chroot.
+- `update-chroot` — Update all packages inside the chroot (`tazpkg upgrade`).
+- `nuke` — Wipe the chroot (keeps wok, packages, cache, log, src, repos, iso).
 
 ### 🌐 Repositories
 - `clone` — Clone the wok and extra repos into `~/.slitaz/repos/`.
@@ -91,8 +100,13 @@ TazLab is split into logical command groups. Run `tazlab help` for a quick overv
 - `list [filter]` — List package recipes available in the wok.
 - `search <pat>` — Search for a pattern across all receipts.
 - `info <pkg>` — Show detailed package receipt metadata.
+- `edit <pkg>` — Open a package receipt in `$EDITOR`.
+- `deps <pkg>` — Show build and runtime dependencies of a package.
 
 ### 🧹 Maintenance
+- `check` — Verify all host dependencies are installed.
+- `config` — Show effective configuration (all variables resolved).
+- `init` — Interactive first-time setup wizard.
 - `status` — Show the overall status of the chroot, wok, packages, and repos.
 - `clean` — Clean the build cache and logs.
 
