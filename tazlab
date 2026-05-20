@@ -119,6 +119,14 @@ is_mounted() {
 	mountpoint -q "$CHROOT/$1" 2>/dev/null
 }
 
+# True when at least one process has $CHROOT as its root (another session).
+chroot_in_use() {
+	for p in /proc/[0-9]*/root; do
+		[ "$(readlink "$p" 2>/dev/null)" = "$CHROOT" ] && return 0
+	done
+	return 1
+}
+
 # Decompress to stdout, auto-detecting format from magic bytes.
 # SliTaz keeps the .gz extension for legacy reasons but actually uses lzma.
 # stderr is dropped: initramfs streams often have trailing padding that
@@ -202,6 +210,10 @@ cmd_mount() {
 }
 
 cmd_umount() {
+	if chroot_in_use; then
+		msg "Chroot still in use, keeping mounts."
+		return 0
+	fi
 	for m in 	home/slitaz/repos home/slitaz/src home/slitaz/log \
 		home/slitaz/cache home/slitaz/packages home/slitaz/wok \
 		dev/pts dev sys proc; do
