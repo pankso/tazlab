@@ -28,7 +28,8 @@ tazlab init                 # Interactive setup wizard
 ### 3. Setup the Lab
 Clone the wok and essential repositories, then download and extract the SliTaz rootfs for your target architecture:
 ```bash
-tazlab clone                        # Clone wok + essential repos
+tazlab clone i486                    # Clone wok + essential repos (32-bit)
+tazlab clone x86_64                  # Clone wok + essential repos (64-bit)
 sudo tazlab setup i486              # Setup 32-bit chroot
 sudo tazlab setup x86_64            # Setup 64-bit chroot
 ```
@@ -57,15 +58,16 @@ sudo tazlab qemu i486              # Test your 32-bit ISO in QEMU
 
 ## 📁 Directory Layout
 
-By default, everything lives in `~/.slitaz/` on your host. Each architecture has its own chroot, packages, cache, and logs, while wok, repos, src, and ISOs are shared between architectures.
+By default, everything lives in `~/.slitaz/` on your host. Each architecture has its own chroot, wok, packages, cache, and logs, while repos, src, and ISOs are shared between architectures.
 
 | Directory | Description |
 | :--- | :--- |
 | `i486/chroot/` | 32-bit SliTaz rootfs (the chroot environment). |
+| `i486/wok/` | Package recipes for 32-bit builds (bind-mounted). |
 | `i486/packages/` | Built 32-bit `.tazpkg` files. |
 | `x86_64/chroot/` | 64-bit SliTaz rootfs. |
+| `x86_64/wok/` | Package recipes for 64-bit builds (bind-mounted). |
 | `x86_64/packages/` | Built 64-bit `.tazpkg` files. |
-| `wok/` | Package recipes shared between architectures (bind-mounted). |
 | `repos/` | Cloned Mercurial (HG) repos (cookutils, base-files, etc). |
 | `src/` | Downloaded source tarballs, shared. |
 | `iso/` | Cached SliTaz ISO images for both architectures. |
@@ -89,11 +91,11 @@ All chroot commands accept an optional `[arch]` argument (`i486` or `x86_64`). I
 - `cook [arch] <pkg>` — Cook a package inside the chroot.
 - `run [arch] <cmd>` — Run an arbitrary command inside the chroot.
 - `update-chroot [arch]` — Update all packages inside the chroot (`tazpkg upgrade`).
-- `nuke [arch]` — Wipe an architecture (chroot, packages, cache, logs). Shared dirs kept.
+- `nuke [arch]` — Wipe an architecture (chroot, packages, cache, logs). Wok kept.
 
 ### 🌐 Repositories
-- `clone` — Clone the wok and extra repos into `~/.slitaz/repos/`.
-- `pull` — Run `hg pull -u` on all cloned repositories.
+- `clone [arch]` — Clone the wok (per-architecture) and extra repos into `~/.slitaz/`.
+- `pull [arch]` — Run `hg pull -u` on the wok and all cloned repositories.
 - `repos` — Show the status of each cloned repository.
 - `add-repo <url>` — Add an extra HG repo to the tracking list.
 
@@ -102,11 +104,11 @@ All chroot commands accept an optional `[arch]` argument (`i486` or `x86_64`). I
 
 ### 🔍 Inspection
 - `log <pkg>` — Show the build log (runs `tail -f` if currently building).
-- `list [filter]` — List package recipes available in the wok.
-- `search <pat>` — Search for a pattern across all receipts.
-- `info <pkg>` — Show detailed package receipt metadata.
-- `edit <pkg>` — Open a package receipt in `$EDITOR`.
-- `deps <pkg>` — Show build and runtime dependencies of a package.
+- `list [arch] [filter]` — List package recipes available in the wok.
+- `search [arch] <pat>` — Search for a pattern across all receipts.
+- `info [arch] <pkg>` — Show detailed package receipt metadata.
+- `edit [arch] <pkg>` — Open a package receipt in `$EDITOR`.
+- `deps [arch] <pkg>` — Show build and runtime dependencies of a package.
 
 ### 🧹 Maintenance
 - `check` — Verify all host dependencies are installed.

@@ -45,6 +45,14 @@ validate_arch() {
 	esac
 }
 
+# Like validate_arch but dies on invalid values. Used in dispatch for
+# commands where [arch] is the only optional argument (not for cook/run
+# where $2 might be a package name instead of an arch).
+check_arch() {
+	[ -n "${1:-}" ] || return 0
+	validate_arch "$1" || die "invalid architecture: $1 (use i486 or x86_64)"
+}
+
 # Detect architecture from command-line args (tazlab <cmd> <arch> [rest...]).
 # Do not shift yet: need_root() re-executes with full $@.
 if [ -n "${2:-}" ] && validate_arch "$2"; then
@@ -74,8 +82,8 @@ CHROOT="$SLITAZ_HOME/$ARCH/chroot"
 PACKAGES="$SLITAZ_HOME/$ARCH/packages"
 CACHE="$SLITAZ_HOME/$ARCH/cache"
 LOG="$SLITAZ_HOME/$ARCH/log"
+WOK="$SLITAZ_HOME/$ARCH/wok"
 # Shared between architectures
-WOK="$SLITAZ_HOME/wok"
 SRC="$SLITAZ_HOME/src"
 REPOS="$SLITAZ_HOME/repos"
 
@@ -99,8 +107,8 @@ Commands:
     status [arch]    Show chroot, wok, packages, repos status
 
   Repos:
-    clone            Clone wok + extra repos (REPOS_LIST) into ~/.slitaz/repos/
-    pull             hg pull -u on all cloned repos
+    clone [arch]     Clone wok + extra repos (REPOS_LIST)
+    pull [arch]      hg pull -u on wok and all cloned repos
     repos            Show status of each cloned repo
     add-repo <url>   Add an extra HG repo to REPOS_LIST in tazlab.conf
 
@@ -398,9 +406,10 @@ cmd_clean() {
 
 cmd_nuke() {
 	cmd_umount 2>/dev/null
-	rm -rf "$SLITAZ_HOME/$ARCH"
+	rm -rf "$CHROOT" "$PACKAGES" "$CACHE" "$LOG"
 	msg "Arch '$ARCH' wiped: $SLITAZ_HOME/$ARCH"
-	msg "Shared dirs (wok, repos, src, iso) kept."
+	msg "Wok kept (clean build files with: tazlab enter $ARCH)."
+	msg "Shared dirs (repos, src, iso) kept."
 	msg "Run: tazlab setup $ARCH"
 }
 
@@ -411,6 +420,7 @@ cmd_status() {
 			echo "    Chroot:    $SLITAZ_HOME/$1/chroot"
 			echo "    Size:      $(du -sh "$SLITAZ_HOME/$1/chroot" 2>/dev/null | cut -f1)"
 			echo "    Mounted:   $(mount | grep -c " $SLITAZ_HOME/$1/chroot")"
+			echo "    Wok:       $(ls "$SLITAZ_HOME/$1/wok" 2>/dev/null | wc -l) recipes"
 			echo "    Packages:  $(ls "$SLITAZ_HOME/$1/packages"/*.tazpkg 2>/dev/null | wc -l)"
 			echo "    Cache:     $(du -sh "$SLITAZ_HOME/$1/cache" 2>/dev/null | cut -f1)"
 			echo "    Log:       $(du -sh "$SLITAZ_HOME/$1/log" 2>/dev/null | cut -f1)"
@@ -421,7 +431,6 @@ cmd_status() {
 	_arch_status i486; echo
 	_arch_status x86_64; echo
 	echo "  Shared:"
-	echo "    Wok:       $(ls "$WOK" 2>/dev/null | wc -l) recipes"
 	echo "    ISO:       $(ls "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | wc -l) files"
 	echo "    Src:       $(du -sh "$SRC" 2>/dev/null | cut -f1)"
 	if [ -d "$REPOS" ] && [ -n "$(ls "$REPOS" 2>/dev/null)" ]; then
@@ -577,6 +586,18 @@ EOF
 # --- Repos ------------------------------------------------------------
 
 cmd_clone() {
+	wok_url="$HG_BASE/wok"
+	if [ -d "$WOK/.hg" ]; then
+		msg "Already cloned: wok (use 'tazlab pull $ARCH')"
+	else
+		mkdir -p "$(dirname "$WOK")"
+		if [ -n "$SUDO_USER" ]; then
+			chown "$SUDO_USER": "$(dirname "$WOK")" 2>/dev/null
+		fi
+		msg "Cloning: wok ($wok_url) -> $WOK"
+		hg clone "$wok_url" "$WOK" || die "clone failed: wok"
+	fi
+
 	mkdir -p "$REPOS"
 	if [ -n "$SUDO_USER" ]; then
 		chown "$SUDO_USER": "$REPOS" 2>/dev/null
@@ -592,26 +613,29 @@ cmd_clone() {
 		hg clone "$1" "$REPOS/$name" || die "clone failed: $name"
 	}
 
-	# Wok is always cloned.
-	_clone_one "$HG_BASE/wok-current"
 	# Extra repos from config.
 	for r in $REPOS_LIST; do
 		_clone_one "$HG_BASE/$r"
 	done
-	success "Done. Repos in: $REPOS"
+	success "Done. Wok in: $WOK, repos in: $REPOS"
 }
 
 cmd_pull() {
-	[ -d "$REPOS" ] || die "no repos directory. Run: tazlab clone"
 	count=0
-	for r in "$REPOS"/*; do
-		[ -d "$r/.hg" ] || continue
-		name=$(basename "$r")
+
+	_pull_one() {
+		[ -d "$1/.hg" ] || return 0
+		name=$(basename "$1")
 		msg "Pulling: $name"
-		hg -R "$r" pull -u || warn "pull failed for $name"
+		hg -R "$1" pull -u || warn "pull failed for $name"
 		count=$((count + 1))
+	}
+
+	_pull_one "$WOK"
+	for r in "$REPOS"/*; do
+		_pull_one "$r"
 	done
-	[ "$count" -gt 0 ] || die "no HG repos found in $REPOS"
+	[ "$count" -gt 0 ] || die "no HG repos found"
 	success "Done. $count repos pulled."
 }
 
@@ -719,7 +743,7 @@ cmd_log() {
 }
 
 cmd_list() {
-	[ -d "$WOK" ] || die "no wok. Run: tazlab clone"
+	[ -d "$WOK" ] || die "no wok for $ARCH. Run: tazlab clone $ARCH"
 	ls "$WOK" ${1:+"$WOK/$1*"} 2>/dev/null | while read -r d; do
 		[ -f "$d/receipt" ] || continue
 		basename "$d"
@@ -728,7 +752,7 @@ cmd_list() {
 
 cmd_search() {
 	[ -n "$1" ] || die "usage: tazlab search <pattern>"
-	[ -d "$WOK" ] || die "no wok. Run: tazlab clone"
+	[ -d "$WOK" ] || die "no wok for $ARCH. Run: tazlab clone $ARCH"
 	grep -rl "$1" "$WOK"/*/receipt 2>/dev/null | while read -r r; do
 		pkg=$(basename "$(dirname "$r")")
 		desc=$(awk -F\" '/^SHORT_DESC=/{print $2; exit}' "$r")
@@ -772,17 +796,17 @@ case "$1" in
 esac
 
 case "$1" in
-	setup)         validate_arch "${2:-}" && shift; cmd_setup ;;
+	setup)         check_arch "${2:-}" && shift; cmd_setup ;;
 	setup-user)    validate_arch "${2:-}" && shift; shift; cmd_setup_user "$@" ;;
-	enter)         validate_arch "${2:-}" && shift; cmd_enter ;;
+	enter)         check_arch "${2:-}" && shift; cmd_enter ;;
 	enter-user)    validate_arch "${2:-}" && shift; shift; cmd_enter_user "$@" ;;
-	umount)        validate_arch "${2:-}" && shift; cmd_umount ;;
+	umount)        check_arch "${2:-}" && shift; cmd_umount ;;
 	cook)          validate_arch "${2:-}" && shift; shift; cmd_cook "$@" ;;
 	run)           validate_arch "${2:-}" && shift; shift; cmd_run "$@" ;;
-	update-chroot) validate_arch "${2:-}" && shift; cmd_update_chroot ;;
-	nuke)          validate_arch "${2:-}" && shift; cmd_nuke ;;
-	clone)         cmd_clone ;;
-	pull)          cmd_pull ;;
+	update-chroot) check_arch "${2:-}" && shift; cmd_update_chroot ;;
+	nuke)          check_arch "${2:-}" && shift; cmd_nuke ;;
+	clone)         check_arch "${2:-}" && shift; cmd_clone ;;
+	pull)          check_arch "${2:-}" && shift; cmd_pull ;;
 	repos)         cmd_repos ;;
 	add-repo)      shift; cmd_add_repo "$@" ;;
 	qemu)          validate_arch "${2:-}" && shift; shift; cmd_qemu "$@" ;;
