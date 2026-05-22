@@ -5,7 +5,7 @@
 
 **SliTaz development lab for foreign GNU/Linux hosts (Debian, Ubuntu, Arch, etc.).**
 
-TazLab allows you to build, develop, and cook SliTaz packages from any Linux distribution using a POSIX shell, mount, chroot, and QEMU.
+TazLab allows you to build, develop, and cook SliTaz packages for i486 and x86_64 from any Linux distribution using a POSIX shell, mount, chroot, and QEMU.
 No `proot`, no `systemd`, no extra dependencies beyond what every standard distro already ships.
 
 ---
@@ -26,15 +26,17 @@ tazlab init                 # Interactive setup wizard
 ```
 
 ### 3. Setup the Lab
-Clone the wok and essential repositories, then download and extract the SliTaz rootfs:
+Clone the wok and essential repositories, then download and extract the SliTaz rootfs for your target architecture:
 ```bash
-tazlab clone                # Clone wok + essential repos
-sudo tazlab setup           # Download and extract SliTaz rootfs
+tazlab clone                        # Clone wok + essential repos
+sudo tazlab setup i486              # Setup 32-bit chroot
+sudo tazlab setup x86_64            # Setup 64-bit chroot
 ```
 
 ### 4. Enter the Chroot
 ```bash
-sudo tazlab enter           # Mount and enter the chroot
+sudo tazlab enter i486              # Enter 32-bit chroot as root
+sudo tazlab enter x86_64            # Enter 64-bit chroot as root
 ```
 
 Inside the chroot, on first use, install the cooking tools:
@@ -46,26 +48,27 @@ cook setup
 ### 5. Cook and Test
 Back on your host, you can now build packages. If you build custom SliTaz ISOs (e.g. using `tazlito`), you can quickly test them:
 ```bash
-sudo tazlab cook busybox      # Cook a package
-sudo tazlab qemu              # Test your SliTaz ISO in QEMU
+sudo tazlab cook i486 busybox      # Cook a 32-bit package
+sudo tazlab cook x86_64 busybox    # Cook a 64-bit package
+sudo tazlab qemu i486              # Test your 32-bit ISO in QEMU
 ```
 
 ---
 
 ## 📁 Directory Layout
 
-By default, everything lives in `~/.slitaz/` on your host. This isolation ensures your host system stays clean while keeping your work persistent across chroot sessions.
+By default, everything lives in `~/.slitaz/` on your host. Each architecture has its own chroot, packages, cache, and logs, while wok, repos, src, and ISOs are shared between architectures.
 
 | Directory | Description |
 | :--- | :--- |
-| `chroot/` | The SliTaz rootfs (the actual chroot environment). |
-| `wok/` | Package recipes (bind-mounted inside the chroot). |
+| `i486/chroot/` | 32-bit SliTaz rootfs (the chroot environment). |
+| `i486/packages/` | Built 32-bit `.tazpkg` files. |
+| `x86_64/chroot/` | 64-bit SliTaz rootfs. |
+| `x86_64/packages/` | Built 64-bit `.tazpkg` files. |
+| `wok/` | Package recipes shared between architectures (bind-mounted). |
 | `repos/` | Cloned Mercurial (HG) repos (cookutils, base-files, etc). |
-| `packages/` | Built `.tazpkg` files ready for deployment. |
-| `cache/` | Build cache. |
-| `log/` | Build logs. |
-| `src/` | Downloaded source tarballs. |
-| `iso/` | Cached SliTaz ISO images. |
+| `src/` | Downloaded source tarballs, shared. |
+| `iso/` | Cached SliTaz ISO images for both architectures. |
 
 > **Note:** You can override these paths via `/etc/slitaz/tazlab.conf`, `~/.slitaz/tazlab.conf`, or `./tazlab.conf` (last wins).
 
@@ -76,15 +79,17 @@ By default, everything lives in `~/.slitaz/` on your host. This isolation ensure
 TazLab is split into logical command groups. Run `tazlab help` for a quick overview.
 
 ### 📦 Chroot Management
-- `setup` — Download SliTaz ISO and extract rootfs to chroot.
-- `setup-user [u]` — Create an unprivileged user in the chroot.
-- `enter` — Mount and enter the chroot as `root`.
-- `enter-user [u]` — Mount and enter as an unprivileged user.
-- `umount` — Unmount the chroot (skips if another session is active).
-- `cook <pkg>` — Cook a package inside the chroot.
-- `run <cmd>` — Run an arbitrary command inside the chroot.
-- `update-chroot` — Update all packages inside the chroot (`tazpkg upgrade`).
-- `nuke` — Wipe the chroot (keeps wok, packages, cache, log, src, repos, iso).
+All chroot commands accept an optional `[arch]` argument (`i486` or `x86_64`). If omitted, the default architecture from your config is used.
+
+- `setup [arch]` — Download SliTaz ISO and extract rootfs to chroot.
+- `setup-user [arch] [u]` — Create an unprivileged user in the chroot.
+- `enter [arch]` — Mount and enter the chroot as `root`.
+- `enter-user [arch] [u]` — Mount and enter as an unprivileged user.
+- `umount [arch]` — Unmount the chroot (skips if another session is active).
+- `cook [arch] <pkg>` — Cook a package inside the chroot.
+- `run [arch] <cmd>` — Run an arbitrary command inside the chroot.
+- `update-chroot [arch]` — Update all packages inside the chroot (`tazpkg upgrade`).
+- `nuke [arch]` — Wipe an architecture (chroot, packages, cache, logs). Shared dirs kept.
 
 ### 🌐 Repositories
 - `clone` — Clone the wok and extra repos into `~/.slitaz/repos/`.
@@ -93,7 +98,7 @@ TazLab is split into logical command groups. Run `tazlab help` for a quick overv
 - `add-repo <url>` — Add an extra HG repo to the tracking list.
 
 ### 🖥️ Virtualization
-- `qemu [iso]` — Run a SliTaz ISO in QEMU (use `--iso=<url>` to download a specific one).
+- `qemu [arch] [iso]` — Run a SliTaz ISO in QEMU (arch selects the right ISO and QEMU binary).
 
 ### 🔍 Inspection
 - `log <pkg>` — Show the build log (runs `tail -f` if currently building).
@@ -107,7 +112,7 @@ TazLab is split into logical command groups. Run `tazlab help` for a quick overv
 - `check` — Verify all host dependencies are installed.
 - `config` — Show effective configuration (all variables resolved).
 - `init` — Interactive first-time setup wizard.
-- `status` — Show the overall status of the chroot, wok, packages, and repos.
+- `status` — Show status of both architectures (chroot, packages, cache) and shared dirs.
 - `clean` — Clean the build cache and logs.
 
 ---

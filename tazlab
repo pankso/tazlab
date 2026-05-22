@@ -34,8 +34,26 @@ fi
 [ -r ./tazlab.conf ]              && . ./tazlab.conf
 
 : ${SLITAZ_HOME:=$HOME/.slitaz}
-: ${CHROOT:=$SLITAZ_HOME/chroot}
-: ${ISO_URL:=https://people.slitaz.org/~shann/slitaz-current64-stuff/slitaz-current64-core64-grub2.iso}
+: ${ARCH:=x86_64}
+: ${ISO_URL_i486:=http://mirror.slitaz.org/iso/rolling/slitaz-rolling.iso}
+: ${ISO_URL_x86_64:=https://people.slitaz.org/~shann/slitaz-current64-stuff/slitaz-current64-core64-grub2.iso}
+
+validate_arch() {
+	case "$1" in
+		i486|x86_64) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+# Detect architecture from command-line args (tazlab <cmd> <arch> [rest...]).
+# Do not shift yet: need_root() re-executes with full $@.
+if [ -n "${2:-}" ] && validate_arch "$2"; then
+	ARCH="$2"
+fi
+
+# Resolve per-arch ISO_URL
+ISO_URL=$(eval echo "\$ISO_URL_$ARCH")
+: ${ISO_URL:=$ISO_URL_x86_64}
 
 # Default unprivileged user for `enter-user` / `setup-user`. Falls back to
 # $SUDO_USER (the host user that invoked sudo), then $USER. Override in
@@ -52,28 +70,33 @@ fi
 : ${QEMU_SMP:=2}
 : ${QEMU_ARGS:=-net nic -net user}
 
+CHROOT="$SLITAZ_HOME/$ARCH/chroot"
+PACKAGES="$SLITAZ_HOME/$ARCH/packages"
+CACHE="$SLITAZ_HOME/$ARCH/cache"
+LOG="$SLITAZ_HOME/$ARCH/log"
+# Shared between architectures
 WOK="$SLITAZ_HOME/wok"
-PACKAGES="$SLITAZ_HOME/packages"
-CACHE="$SLITAZ_HOME/cache"
-LOG="$SLITAZ_HOME/log"
 SRC="$SLITAZ_HOME/src"
 REPOS="$SLITAZ_HOME/repos"
 
 usage() {
 	cat <<EOF
-Usage: tazlab <command> [args]
+Usage: tazlab <command> [arch] [args]
+
+  Architecture: i486 (32-bit) or x86_64 (64-bit). If omitted, uses \$ARCH from
+  config (default: x86_64). Example: tazlab setup i486     tazlab enter x86_64
 
 Commands:
-    setup            Download SliTaz ISO and extract rootfs to chroot
-    setup-user [u]   Create an unprivileged user in the chroot (default: $BUILDER)
-    enter            Mount and enter the chroot as root
-    enter-user [u]   Mount and enter the chroot as an unprivileged user
-    umount           Unmount the chroot
-    cook <pkg>       Cook a package inside the chroot (root)
-    run <cmd>        Run an arbitrary command inside the chroot
-    update-chroot    Update all packages inside the chroot (tazpkg upgrade)
-    nuke             Wipe the chroot (keeps wok/packages/cache/log/src/repos/iso)
-    status           Show chroot, wok, packages, repos status
+    setup [arch]     Download SliTaz ISO and extract rootfs to chroot
+    setup-user [a][u]Create an unprivileged user in the chroot (default: $BUILDER)
+    enter [arch]     Mount and enter the chroot as root
+    enter-user [a][u]Mount and enter the chroot as an unprivileged user
+    umount [arch]    Unmount the chroot
+    cook [arch] <p>  Cook a package inside the chroot (root)
+    run [arch] <cmd> Run an arbitrary command inside the chroot
+    update-chroot [a]Update all packages inside the chroot (tazpkg upgrade)
+    nuke [arch]      Wipe chroot+packages+cache+log for an architecture
+    status [arch]    Show chroot, wok, packages, repos status
 
   Repos:
     clone            Clone wok + extra repos (REPOS_LIST) into ~/.slitaz/repos/
@@ -82,7 +105,7 @@ Commands:
     add-repo <url>   Add an extra HG repo to REPOS_LIST in tazlab.conf
 
   Qemu:
-    qemu [iso]       Run SliTaz ISO in Qemu (-iso <url> to download first)
+    qemu [arch] [iso]Run SliTaz ISO in Qemu (-iso <url> to download first)
 
   Inspect:
     log <pkg>        Show build log (or tail -f if building)
@@ -102,7 +125,7 @@ Commands that touch the chroot or mounts auto-elevate via sudo.
 Builder user (current default): $BUILDER
 
 Config: /etc/slitaz/tazlab.conf, ~/.slitaz/tazlab.conf, ./tazlab.conf
-Chroot: $CHROOT
+Active arch: $ARCH  Chroot: $CHROOT
 
 tazlab $VERSION - SliTaz GNU/Linux
 EOF
@@ -146,10 +169,12 @@ decomp() {
 
 cmd_setup() {
 	[ -d "$CHROOT/bin" ] && die "chroot already set up at: $CHROOT"
-	mkdir -p "$CHROOT" "$WOK" "$PACKAGES" "$CACHE" "$LOG" "$SRC" \
-		"$REPOS" "$SLITAZ_HOME/iso"
+	mkdir -p "$SLITAZ_HOME/$ARCH" "$CHROOT" "$WOK" "$PACKAGES" \
+		"$CACHE" "$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso"
+	msg "Architecture: $ARCH"
 	iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
-	if [ ! -f "$iso" ]; then
+	if [ ! -s "$iso" ]; then
+		[ -f "$iso" ] && msg "Cached ISO is empty, re-downloading."
 		msg "Downloading ISO: $ISO_URL"
 		wget -O "$iso" "$ISO_URL" || die "ISO download failed"
 	else
@@ -168,23 +193,37 @@ cmd_setup() {
 	}
 	msg "Extracting rootfs to: $CHROOT"
 	for l in $layers; do echo "  layer: $l ($(stat -c%s "$l") bytes)"; done
-	( cd "$CHROOT" && for l in $layers; do decomp "$l"; done \
-		| cpio -idmu --quiet ) \
-		|| { umount "$mnt"; rmdir "$mnt"; die "rootfs extraction failed"; }
+	for l in $layers; do
+		decomp "$l" | ( cd "$CHROOT" && cpio -idmu --quiet ) \
+			|| { umount "$mnt"; rmdir "$mnt"; die "rootfs extraction failed"; }
+	done
 	umount "$mnt" && rmdir "$mnt"
 	[ -x "$CHROOT/bin/sh" ] || die "extracted chroot looks broken (no /bin/sh)"
 	echo slitaz > "$CHROOT/etc/hostname"
+	# Create sudo user's home inside the chroot so 'cd' works out of the
+	# box, and provide a .profile with a welcome message.
+	if [ -n "$SUDO_USER" ]; then
+		mkdir -p "$CHROOT/home/$SUDO_USER"
+		cat > "$CHROOT/home/$SUDO_USER/.profile" <<EOF
+echo ""
+echo "Welcome to SliTaz Chroot - Arch: $ARCH"
+echo ""
+EOF
+		chown "$SUDO_USER": "$CHROOT/home/$SUDO_USER" \
+			"$CHROOT/home/$SUDO_USER/.profile" 2>/dev/null
+	fi
 	# Make host-shared dirs owned by the calling user so recipes can be
 	# edited without sudo. Chroot itself stays root-owned.
 	if [ -n "$SUDO_USER" ]; then
-		chown "$SUDO_USER": "$SLITAZ_HOME" "$WOK" "$PACKAGES" "$CACHE" \
-			"$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
+		chown "$SUDO_USER": "$SLITAZ_HOME" "$SLITAZ_HOME/$ARCH" \
+			"$PACKAGES" "$CACHE" "$LOG" \
+			"$WOK" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
 	fi
-	success "Done. Run: sudo tazlab enter"
+	success "Done. Run: sudo tazlab enter $ARCH"
 }
 
 cmd_mount() {
-	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup"
+	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup $ARCH"
 	is_mounted proc    || mount -t proc  proc "$CHROOT/proc"
 	is_mounted sys     || mount -t sysfs sys  "$CHROOT/sys"
 	is_mounted dev     || mount --bind /dev     "$CHROOT/dev"
@@ -239,7 +278,7 @@ _host_uid() {
 cmd_setup_user() {
 	hint="${1:-$BUILDER}"
 	[ -n "$hint" ] || die "no user specified and BUILDER is empty"
-	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup"
+	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup $ARCH"
 	uid=$(_host_uid "$hint")
 	[ -n "$uid" ] || die "user not found on host: $hint"
 
@@ -317,10 +356,10 @@ cmd_enter_user() {
 		user=$(awk -F: -v u="$uid" '$3==u {print $1; exit}' \
 			"$CHROOT/etc/passwd" 2>/dev/null)
 		[ -n "$user" ] \
-			|| die "no chroot user at uid=$uid. Run: tazlab setup-user"
+			|| die "no chroot user at uid=$uid. Run: tazlab setup-user $ARCH"
 	fi
 	grep -q "^$user:" "$CHROOT/etc/passwd" 2>/dev/null \
-		|| die "user '$user' not in chroot. Run: tazlab setup-user $user"
+		|| die "user '$user' not in chroot. Run: tazlab setup-user $ARCH $user"
 	cmd_mount
 	unshare -u chroot "$CHROOT" /bin/sh -c \
 		"hostname slitaz; exec su - $user"
@@ -359,36 +398,43 @@ cmd_clean() {
 
 cmd_nuke() {
 	cmd_umount 2>/dev/null
-	rm -rf "$CHROOT"
-	msg "Chroot wiped: $CHROOT"
-	msg "Wok, packages, src, cache, log, repos and cached ISO kept."
-	msg "Run: tazlab setup"
+	rm -rf "$SLITAZ_HOME/$ARCH"
+	msg "Arch '$ARCH' wiped: $SLITAZ_HOME/$ARCH"
+	msg "Shared dirs (wok, repos, src, iso) kept."
+	msg "Run: tazlab setup $ARCH"
 }
 
 cmd_status() {
-	echo "Chroot:    $CHROOT"
-	if [ -d "$CHROOT/bin" ]; then
-		echo "Size:      $(du -sh "$CHROOT" 2>/dev/null | cut -f1)"
-		echo "Mounted:   $(mount | grep -c " $CHROOT")"
-	else
-		warn "Status: chroot not set up (run: tazlab setup)"
-		return
-	fi
-	echo "Wok:       $(ls "$WOK" 2>/dev/null | wc -l) recipes"
-	echo "Packages:  $(ls "$PACKAGES"/*.tazpkg 2>/dev/null | wc -l)"
-	echo "Cache:     $(du -sh "$CACHE" 2>/dev/null | cut -f1)"
-	echo "ISO:       $(ls "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | wc -l) files"
+	_arch_status() {
+		echo "  Architecture: ${C_CYAN}$1${C_NONE}"
+		if [ -d "$SLITAZ_HOME/$1/chroot/bin" ]; then
+			echo "    Chroot:    $SLITAZ_HOME/$1/chroot"
+			echo "    Size:      $(du -sh "$SLITAZ_HOME/$1/chroot" 2>/dev/null | cut -f1)"
+			echo "    Mounted:   $(mount | grep -c " $SLITAZ_HOME/$1/chroot")"
+			echo "    Packages:  $(ls "$SLITAZ_HOME/$1/packages"/*.tazpkg 2>/dev/null | wc -l)"
+			echo "    Cache:     $(du -sh "$SLITAZ_HOME/$1/cache" 2>/dev/null | cut -f1)"
+			echo "    Log:       $(du -sh "$SLITAZ_HOME/$1/log" 2>/dev/null | cut -f1)"
+		else
+			echo "    Status:    not set up (run: tazlab setup $1)"
+		fi
+	}
+	_arch_status i486; echo
+	_arch_status x86_64; echo
+	echo "  Shared:"
+	echo "    Wok:       $(ls "$WOK" 2>/dev/null | wc -l) recipes"
+	echo "    ISO:       $(ls "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | wc -l) files"
+	echo "    Src:       $(du -sh "$SRC" 2>/dev/null | cut -f1)"
 	if [ -d "$REPOS" ] && [ -n "$(ls "$REPOS" 2>/dev/null)" ]; then
-		echo "Repos:"
+		echo "    Repos:"
 		for r in "$REPOS"/*; do
 			[ -d "$r/.hg" ] || continue
 			name=$(basename "$r")
 			branch=$(hg -R "$r" branch 2>/dev/null)
 			rev=$(hg -R "$r" log -l1 --template '{rev}:{node|short}' 2>/dev/null)
-			echo "  $name  $branch  $rev"
+			echo "      $name  $branch  $rev"
 		done
 	else
-		echo "Repos:     none (run: tazlab clone)"
+		echo "    Repos:     none (run: tazlab clone)"
 	fi
 }
 
@@ -446,6 +492,7 @@ cmd_check() {
 
 cmd_config() {
 	msg "TazLab v$VERSION configuration"
+	echo "ARCH        = $ARCH"
 	echo "SLITAZ_HOME = $SLITAZ_HOME"
 	echo "CHROOT      = $CHROOT"
 	echo "ISO_URL     = $ISO_URL"
@@ -461,6 +508,9 @@ cmd_config() {
 	echo "QEMU_MEM    = $QEMU_MEM"
 	echo "QEMU_SMP    = $QEMU_SMP"
 	echo "QEMU_ARGS   = $QEMU_ARGS"
+	echo "---"
+	echo "ISO_URL_i486   = $ISO_URL_i486"
+	echo "ISO_URL_x86_64 = $ISO_URL_x86_64"
 	echo "---"
 	msg "Config files loaded (last wins):"
 	[ -r /etc/slitaz/tazlab.conf ]    && echo "  /etc/slitaz/tazlab.conf"
@@ -482,6 +532,11 @@ cmd_init() {
 	read -r answer
 	: "${answer:=$HOME/.slitaz}"
 	SLITAZ_HOME="$answer"
+
+	printf "Default architecture [x86_64]: "
+	read -r answer
+	: "${answer:=x86_64}"
+	ARCH="$answer"
 
 	printf "Builder user [%s]: " "${SUDO_USER:-$USER}"
 	read -r answer
@@ -507,6 +562,7 @@ cmd_init() {
 	cat > "$conf" <<EOF
 # tazlab configuration
 SLITAZ_HOME="$SLITAZ_HOME"
+ARCH="$ARCH"
 BUILDER="$BUILDER"
 REPOS_LIST="$REPOS_LIST"
 QEMU_MEM="$QEMU_MEM"
@@ -515,7 +571,7 @@ EOF
 	success "Configuration saved to: $conf"
 	msg "Next steps:"
 	msg "  tazlab clone"
-	msg "  sudo tazlab setup"
+	msg "  sudo tazlab setup $ARCH"
 }
 
 # --- Repos ------------------------------------------------------------
@@ -601,17 +657,29 @@ cmd_qemu() {
 			wget -O "$iso" "$url" || die "download failed"
 		fi
 	elif [ -z "$iso" ]; then
-		# Auto-detect latest ISO.
-		iso=$(ls -t "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | head -1)
-		[ -n "$iso" ] || die "no ISO found in $SLITAZ_HOME/iso/"
+		# Use per-arch ISO URL.
+		iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
+		mkdir -p "$SLITAZ_HOME/iso"
+		if [ ! -f "$iso" ]; then
+			msg "Downloading ISO ($ARCH): $ISO_URL"
+			wget -O "$iso" "$ISO_URL" || die "download failed"
+		fi
 	fi
+	msg "Architecture: $ARCH"
 	msg "ISO: $iso"
 
-	qemu_bin="qemu-system-x86_64"
+	case "$ARCH" in
+		x86_64)
+			qemu_bin="qemu-system-x86_64"
+			command -v "$qemu_bin" >/dev/null 2>&1 \
+				|| qemu_bin="qemu-system-i386"
+			;;
+		i486)
+			qemu_bin="qemu-system-i386"
+			;;
+	esac
 	command -v "$qemu_bin" >/dev/null 2>&1 \
-		|| qemu_bin="qemu-system-i386"
-	command -v "$qemu_bin" >/dev/null 2>&1 \
-		|| die "qemu not found (install qemu-system-x86)"
+		|| die "qemu not found (install $qemu_bin)"
 
 	set -- -m "$QEMU_MEM" -smp "$QEMU_SMP" $QEMU_ARGS -cdrom "$iso"
 	if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
@@ -704,20 +772,20 @@ case "$1" in
 esac
 
 case "$1" in
-	setup)         cmd_setup ;;
-	setup-user)    shift; cmd_setup_user "$@" ;;
-	enter)         cmd_enter ;;
-	enter-user)    shift; cmd_enter_user "$@" ;;
-	umount)        cmd_umount ;;
-	cook)          shift; cmd_cook "$@" ;;
-	run)           shift; cmd_run "$@" ;;
-	update-chroot) cmd_update_chroot ;;
-	nuke)          cmd_nuke ;;
+	setup)         validate_arch "${2:-}" && shift; cmd_setup ;;
+	setup-user)    validate_arch "${2:-}" && shift; shift; cmd_setup_user "$@" ;;
+	enter)         validate_arch "${2:-}" && shift; cmd_enter ;;
+	enter-user)    validate_arch "${2:-}" && shift; shift; cmd_enter_user "$@" ;;
+	umount)        validate_arch "${2:-}" && shift; cmd_umount ;;
+	cook)          validate_arch "${2:-}" && shift; shift; cmd_cook "$@" ;;
+	run)           validate_arch "${2:-}" && shift; shift; cmd_run "$@" ;;
+	update-chroot) validate_arch "${2:-}" && shift; cmd_update_chroot ;;
+	nuke)          validate_arch "${2:-}" && shift; cmd_nuke ;;
 	clone)         cmd_clone ;;
 	pull)          cmd_pull ;;
 	repos)         cmd_repos ;;
 	add-repo)      shift; cmd_add_repo "$@" ;;
-	qemu)          shift; cmd_qemu "$@" ;;
+	qemu)          validate_arch "${2:-}" && shift; shift; cmd_qemu "$@" ;;
 	log)           shift; cmd_log "$@" ;;
 	list)          shift; cmd_list "$@" ;;
 	search)        shift; cmd_search "$@" ;;
@@ -727,7 +795,7 @@ case "$1" in
 	check)         cmd_check ;;
 	config)        cmd_config ;;
 	init)          cmd_init ;;
-	clean)         cmd_clean ;;
+	clean)         validate_arch "${2:-}" && shift; cmd_clean ;;
 	status)        cmd_status ;;
 	""|help|-h|--help|-v|--version) usage ;;
 	*) die "unknown command: $1 (try: tazlab help)" ;;
