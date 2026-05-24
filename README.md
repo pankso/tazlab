@@ -5,7 +5,7 @@
 
 **SliTaz development lab for foreign GNU/Linux hosts (Debian, Ubuntu, Arch, etc.).**
 
-TazLab allows you to build, develop, and cook SliTaz packages for i486 and x86_64 from any Linux distribution using a POSIX shell, mount, chroot, and QEMU.
+TazLab allows you to build, develop, and cook SliTaz packages for i486, x86_64, or custom environments from any Linux distribution using a POSIX shell, mount, chroot, and QEMU.
 No `proot`, no `systemd`, no extra dependencies beyond what every standard distro already ships.
 
 ---
@@ -13,7 +13,12 @@ No `proot`, no `systemd`, no extra dependencies beyond what every standard distr
 ## 🚀 Quick Start
 
 ### 1. Install
-Install the script on your host system:
+TazLab is a single self-contained script. You can run it directly without installing:
+```bash
+./tazlab help
+```
+
+Or install system-wide so it is available as `tazlab` from anywhere:
 ```bash
 sudo make install
 ```
@@ -26,12 +31,14 @@ tazlab init                 # Interactive setup wizard
 ```
 
 ### 3. Setup the Lab
-Clone the wok and essential repositories, then download and extract the SliTaz rootfs for your target architecture:
+Clone the wok and essential repositories, then download and extract the SliTaz rootfs for your target architecture or custom environment:
 ```bash
 tazlab clone i486                    # Clone wok + essential repos (32-bit)
 tazlab clone x86_64                  # Clone wok + essential repos (64-bit)
+tazlab clone mylab                   # Clone wok for a custom env
 sudo tazlab setup i486              # Setup 32-bit chroot
 sudo tazlab setup x86_64            # Setup 64-bit chroot
+sudo tazlab setup mylab             # Setup custom env (needs ISO_URL_mylab in config)
 ```
 
 ### 4. Enter the Chroot
@@ -51,6 +58,7 @@ Back on your host, you can now build packages. If you build custom SliTaz ISOs (
 ```bash
 sudo tazlab cook i486 busybox      # Cook a 32-bit package
 sudo tazlab cook x86_64 busybox    # Cook a 64-bit package
+sudo tazlab cook mylab busybox     # Cook in a custom environment
 sudo tazlab qemu i486              # Test your 32-bit ISO in QEMU
 ```
 
@@ -58,21 +66,20 @@ sudo tazlab qemu i486              # Test your 32-bit ISO in QEMU
 
 ## 📁 Directory Layout
 
-By default, everything lives in `~/.slitaz/` on your host. Each architecture has its own chroot, wok, packages, cache, and logs, while repos, src, and ISOs are shared between architectures.
+By default, everything lives in `~/.slitaz/` on your host. Each environment has its own chroot, wok, packages, cache, and logs, while repos, src, and ISOs are shared across environments. Custom environments use the same layout as built-in archs (e.g. `mylab/chroot/`, `mylab/wok/`).
 
 | Directory | Description |
 | :--- | :--- |
-| `i486/chroot/` | 32-bit SliTaz rootfs (the chroot environment). |
-| `i486/wok/` | Package recipes for 32-bit builds (bind-mounted). |
-| `i486/packages/` | Built 32-bit `.tazpkg` files. |
-| `x86_64/chroot/` | 64-bit SliTaz rootfs. |
-| `x86_64/wok/` | Package recipes for 64-bit builds (bind-mounted). |
-| `x86_64/packages/` | Built 64-bit `.tazpkg` files. |
+| `<env>/chroot/` | SliTaz rootfs for that environment. |
+| `<env>/wok/` | Package recipes for that environment (bind-mounted). |
+| `<env>/packages/` | Built `.tazpkg` files. |
 | `repos/` | Cloned Mercurial (HG) repos (cookutils, base-files, etc). |
 | `src/` | Downloaded source tarballs, shared. |
-| `iso/` | Cached SliTaz ISO images for both architectures. |
+| `iso/` | Cached SliTaz ISO images. |
 
 > **Note:** You can override these paths via `/etc/slitaz/tazlab.conf`, `~/.slitaz/tazlab.conf`, or `./tazlab.conf` (last wins).
+>
+> **Custom env ISO URLs:** hyphens in env names become underscores in variable names. For an env named `my-lab`, set `ISO_URL_my_lab="https://..."` in your config.
 
 ---
 
@@ -81,40 +88,40 @@ By default, everything lives in `~/.slitaz/` on your host. Each architecture has
 TazLab is split into logical command groups. Run `tazlab help` for a quick overview.
 
 ### 📦 Chroot Management
-All chroot commands accept an optional `[arch]` argument (`i486` or `x86_64`). If omitted, the default architecture from your config is used.
+All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a custom name). If omitted, the default environment from your config is used.
 
-- `setup [arch]` — Download SliTaz ISO and extract rootfs to chroot.
-- `setup-user [arch] [u]` — Create an unprivileged user in the chroot.
-- `enter [arch]` — Mount and enter the chroot as `root`.
-- `enter-user [arch] [u]` — Mount and enter as an unprivileged user.
-- `umount [arch]` — Unmount the chroot (skips if another session is active).
-- `cook [arch] <pkg>` — Cook a package inside the chroot.
-- `run [arch] <cmd>` — Run an arbitrary command inside the chroot.
-- `update-chroot [arch]` — Update all packages inside the chroot (`tazpkg upgrade`).
-- `nuke [arch]` — Wipe an architecture (chroot, packages, cache, logs). Wok kept.
+- `setup [env]` — Download SliTaz ISO and extract rootfs to chroot.
+- `setup-user [env] [u]` — Create an unprivileged user in the chroot.
+- `enter [env]` — Mount and enter the chroot as `root`.
+- `enter-user [env] [u]` — Mount and enter as an unprivileged user.
+- `umount [env]` — Unmount the chroot (skips if another session is active).
+- `cook [env] <pkg>` — Cook a package inside the chroot.
+- `run [env] <cmd>` — Run an arbitrary command inside the chroot.
+- `update-chroot [env]` — Update all packages inside the chroot (`tazpkg upgrade`).
+- `nuke [env]` — Wipe an environment (chroot, packages, cache, logs). Wok kept.
 
 ### 🌐 Repositories
-- `clone [arch]` — Clone the wok (per-architecture) and extra repos into `~/.slitaz/`.
-- `pull [arch]` — Run `hg pull -u` on the wok and all cloned repositories.
+- `clone [env]` — Clone the wok (per-environment) and extra repos into `~/.slitaz/`.
+- `pull [env]` — Run `hg pull -u` on the wok and all cloned repositories.
 - `repos` — Show the status of each cloned repository.
 - `add-repo <url>` — Add an extra HG repo to the tracking list.
 
 ### 🖥️ Virtualization
-- `qemu [arch] [iso]` — Run a SliTaz ISO in QEMU (arch selects the right ISO and QEMU binary).
+- `qemu [env] [iso]` — Run a SliTaz ISO in QEMU (env selects the right ISO and QEMU binary).
 
 ### 🔍 Inspection
 - `log <pkg>` — Show the build log (runs `tail -f` if currently building).
-- `list [arch] [filter]` — List package recipes available in the wok.
-- `search [arch] <pat>` — Search for a pattern across all receipts.
-- `info [arch] <pkg>` — Show detailed package receipt metadata.
-- `edit [arch] <pkg>` — Open a package receipt in `$EDITOR`.
-- `deps [arch] <pkg>` — Show build and runtime dependencies of a package.
+- `list [env] [filter]` — List package recipes available in the wok.
+- `search [env] <pat>` — Search for a pattern across all receipts.
+- `info [env] <pkg>` — Show detailed package receipt metadata.
+- `edit [env] <pkg>` — Open a package receipt in `$EDITOR`.
+- `deps [env] <pkg>` — Show build and runtime dependencies of a package.
 
 ### 🧹 Maintenance
 - `check` — Verify all host dependencies are installed.
 - `config` — Show effective configuration (all variables resolved).
 - `init` — Interactive first-time setup wizard.
-- `status` — Show status of both architectures (chroot, packages, cache) and shared dirs.
+- `status` — Show status of all environments (chroot, wok, packages, cache) and shared dirs.
 - `clean` — Clean the build cache and logs.
 
 ---

@@ -45,22 +45,33 @@ validate_arch() {
 	esac
 }
 
-# Like validate_arch but dies on invalid values. Used in dispatch for
-# commands where [arch] is the only optional argument (not for cook/run
-# where $2 might be a package name instead of an arch).
-check_arch() {
+# Recognizes built-in archs AND custom environments that have an
+# existing chroot (so 'tazlab enter mylab' works after setup).
+is_env() {
 	[ -n "${1:-}" ] || return 0
-	validate_arch "$1" || die "invalid architecture: $1 (use i486 or x86_64)"
+	validate_arch "$1" && return 0
+	[ -d "$SLITAZ_HOME/$1/chroot/bin" ] && return 0
+	return 1
+}
+
+# Validates a new environment name for 'setup'. No path separators,
+# no '.', no '..'. Empty is OK (means "use default arch").
+check_name() {
+	[ -n "${1:-}" ] || return 0
+	case "${1:-}" in
+		*/*|.|..) die "invalid environment name: $1" ;;
+	esac
 }
 
 # Detect architecture from command-line args (tazlab <cmd> <arch> [rest...]).
 # Do not shift yet: need_root() re-executes with full $@.
-if [ -n "${2:-}" ] && validate_arch "$2"; then
+if [ -n "${2:-}" ] && is_env "$2"; then
 	ARCH="$2"
 fi
 
-# Resolve per-arch ISO_URL
-ISO_URL=$(eval echo "\$ISO_URL_$ARCH")
+# Resolve per-arch ISO_URL (hyphens in env names become underscores in var names).
+_arch_var=$(printf '%s' "$ARCH" | tr '-' '_')
+ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
 : ${ISO_URL:=$ISO_URL_x86_64}
 
 # Default unprivileged user for `enter-user` / `setup-user`. Falls back to
@@ -87,33 +98,47 @@ WOK="$SLITAZ_HOME/$ARCH/wok"
 SRC="$SLITAZ_HOME/src"
 REPOS="$SLITAZ_HOME/repos"
 
+# Re-derive per-arch paths after ARCH changes (new custom envs bypass is_env).
+recalc_paths() {
+	CHROOT="$SLITAZ_HOME/$ARCH/chroot"
+	PACKAGES="$SLITAZ_HOME/$ARCH/packages"
+	CACHE="$SLITAZ_HOME/$ARCH/cache"
+	LOG="$SLITAZ_HOME/$ARCH/log"
+	WOK="$SLITAZ_HOME/$ARCH/wok"
+}
+
 usage() {
 	cat <<EOF
-Usage: tazlab <command> [arch] [args]
+Usage: tazlab <command> [env] [args]
 
-  Architecture: i486 (32-bit) or x86_64 (64-bit). If omitted, uses \$ARCH from
-  config (default: x86_64). Example: tazlab setup i486     tazlab enter x86_64
+  Environment: i486, x86_64, or a custom name (e.g. 'mydev').
+  Default from config: $ARCH. Examples:
+    tazlab setup i486        tazlab enter x86_64
+    tazlab setup mylab       tazlab enter mylab
+
+Commands set up a per-env chroot, wok, packages, cache and logs under
+$SLITAZ_HOME/<env>/. Repos, src and ISOs are shared across envs.
 
 Commands:
-    setup [arch]     Download SliTaz ISO and extract rootfs to chroot
-    setup-user [a][u]Create an unprivileged user in the chroot (default: $BUILDER)
-    enter [arch]     Mount and enter the chroot as root
-    enter-user [a][u]Mount and enter the chroot as an unprivileged user
-    umount [arch]    Unmount the chroot
-    cook [arch] <p>  Cook a package inside the chroot (root)
-    run [arch] <cmd> Run an arbitrary command inside the chroot
-    update-chroot [a]Update all packages inside the chroot (tazpkg upgrade)
-    nuke [arch]      Wipe chroot+packages+cache+log for an architecture
-    status [arch]    Show chroot, wok, packages, repos status
+    setup [env]     Download SliTaz ISO and extract rootfs to chroot
+    setup-user [e][u]Create an unprivileged user in the chroot (default: $BUILDER)
+    enter [env]     Mount and enter the chroot as root
+    enter-user [e][u]Mount and enter the chroot as an unprivileged user
+    umount [env]    Unmount the chroot
+    cook [env] <p>  Cook a package inside the chroot (root)
+    run [env] <cmd> Run an arbitrary command inside the chroot
+    update-chroot [e]Update all packages inside the chroot (tazpkg upgrade)
+    nuke [env]      Wipe chroot+packages+cache+log for an environment (wok kept)
+    status [env]    Show chroot, wok, packages, repos status
 
   Repos:
-    clone [arch]     Clone wok + extra repos (REPOS_LIST)
-    pull [arch]      hg pull -u on wok and all cloned repos
-    repos            Show status of each cloned repo
-    add-repo <url>   Add an extra HG repo to REPOS_LIST in tazlab.conf
+    clone [env]     Clone wok + extra repos (REPOS_LIST)
+    pull [env]      hg pull -u on wok and all cloned repos
+    repos           Show status of each cloned repo
+    add-repo <url>  Add an extra HG repo to REPOS_LIST in tazlab.conf
 
   Qemu:
-    qemu [arch] [iso]Run SliTaz ISO in Qemu (-iso <url> to download first)
+    qemu [env] [iso]Run SliTaz ISO in Qemu (-iso <url> to download first)
 
   Inspect:
     log <pkg>        Show build log (or tail -f if building)
@@ -177,9 +202,15 @@ decomp() {
 
 cmd_setup() {
 	[ -d "$CHROOT/bin" ] && die "chroot already set up at: $CHROOT"
+	_arch_var=$(printf '%s' "$ARCH" | tr '-' '_')
+	ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
+	case "$ARCH" in
+		i486|x86_64) : ${ISO_URL:=$ISO_URL_x86_64} ;;
+		*) [ -n "$ISO_URL" ] || die "no ISO_URL_${_arch_var} configured. Add to ~/.slitaz/tazlab.conf: ISO_URL_${_arch_var}=\"...\"" ;;
+	esac
 	mkdir -p "$SLITAZ_HOME/$ARCH" "$CHROOT" "$WOK" "$PACKAGES" \
 		"$CACHE" "$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso"
-	msg "Architecture: $ARCH"
+	msg "Environment: $ARCH"
 	iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
 	if [ ! -s "$iso" ]; then
 		[ -f "$iso" ] && msg "Cached ISO is empty, re-downloading."
@@ -214,7 +245,7 @@ cmd_setup() {
 		mkdir -p "$CHROOT/home/$SUDO_USER"
 		cat > "$CHROOT/home/$SUDO_USER/.profile" <<EOF
 echo ""
-echo "Welcome to SliTaz Chroot - Arch: $ARCH"
+echo "Welcome to SliTaz Chroot - Env: $ARCH"
 echo ""
 EOF
 		chown "$SUDO_USER": "$CHROOT/home/$SUDO_USER" \
@@ -407,15 +438,15 @@ cmd_clean() {
 cmd_nuke() {
 	cmd_umount 2>/dev/null
 	rm -rf "$CHROOT" "$PACKAGES" "$CACHE" "$LOG"
-	msg "Arch '$ARCH' wiped: $SLITAZ_HOME/$ARCH"
+	msg "Env '$ARCH' wiped: $SLITAZ_HOME/$ARCH"
 	msg "Wok kept (clean build files with: tazlab enter $ARCH)."
 	msg "Shared dirs (repos, src, iso) kept."
 	msg "Run: tazlab setup $ARCH"
 }
 
 cmd_status() {
-	_arch_status() {
-		echo "  Architecture: ${C_CYAN}$1${C_NONE}"
+	_env_status() {
+		echo "  Environment: ${C_CYAN}$1${C_NONE}"
 		if [ -d "$SLITAZ_HOME/$1/chroot/bin" ]; then
 			echo "    Chroot:    $SLITAZ_HOME/$1/chroot"
 			echo "    Size:      $(du -sh "$SLITAZ_HOME/$1/chroot" 2>/dev/null | cut -f1)"
@@ -428,8 +459,18 @@ cmd_status() {
 			echo "    Status:    not set up (run: tazlab setup $1)"
 		fi
 	}
-	_arch_status i486; echo
-	_arch_status x86_64; echo
+	# Built-in archs always shown.
+	_env_status i486; echo
+	_env_status x86_64; echo
+	# Discover custom envs (any dir with a chroot that isn't i486/x86_64).
+	for d in "$SLITAZ_HOME"/*/chroot/bin; do
+		[ -x "$d" ] || continue
+		env=$(echo "$d" | sed "s|$SLITAZ_HOME/||;s|/chroot/bin||")
+		case "$env" in i486|x86_64) continue ;; esac
+		echo
+		_env_status "$env"
+	done
+	echo
 	echo "  Shared:"
 	echo "    ISO:       $(ls "$SLITAZ_HOME/iso"/*.iso 2>/dev/null | wc -l) files"
 	echo "    Src:       $(du -sh "$SRC" 2>/dev/null | cut -f1)"
@@ -542,7 +583,7 @@ cmd_init() {
 	: "${answer:=$HOME/.slitaz}"
 	SLITAZ_HOME="$answer"
 
-	printf "Default architecture [x86_64]: "
+	printf "Default environment [x86_64]: "
 	read -r answer
 	: "${answer:=x86_64}"
 	ARCH="$answer"
@@ -681,7 +722,9 @@ cmd_qemu() {
 			wget -O "$iso" "$url" || die "download failed"
 		fi
 	elif [ -z "$iso" ]; then
-		# Use per-arch ISO URL.
+		_arch_var=$(printf '%s' "$ARCH" | tr '-' '_')
+		ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
+		: ${ISO_URL:=$ISO_URL_x86_64}
 		iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
 		mkdir -p "$SLITAZ_HOME/iso"
 		if [ ! -f "$iso" ]; then
@@ -689,7 +732,7 @@ cmd_qemu() {
 			wget -O "$iso" "$ISO_URL" || die "download failed"
 		fi
 	fi
-	msg "Architecture: $ARCH"
+	msg "Environment: $ARCH"
 	msg "ISO: $iso"
 
 	case "$ARCH" in
@@ -700,6 +743,11 @@ cmd_qemu() {
 			;;
 		i486)
 			qemu_bin="qemu-system-i386"
+			;;
+		*)
+			qemu_bin="qemu-system-x86_64"
+			command -v "$qemu_bin" >/dev/null 2>&1 \
+				|| qemu_bin="qemu-system-i386"
 			;;
 	esac
 	command -v "$qemu_bin" >/dev/null 2>&1 \
@@ -796,20 +844,20 @@ case "$1" in
 esac
 
 case "$1" in
-	setup)         check_arch "${2:-}" && shift; cmd_setup ;;
-	setup-user)    validate_arch "${2:-}" && shift; shift; cmd_setup_user "$@" ;;
-	enter)         check_arch "${2:-}" && shift; cmd_enter ;;
-	enter-user)    validate_arch "${2:-}" && shift; shift; cmd_enter_user "$@" ;;
-	umount)        check_arch "${2:-}" && shift; cmd_umount ;;
-	cook)          validate_arch "${2:-}" && shift; shift; cmd_cook "$@" ;;
-	run)           validate_arch "${2:-}" && shift; shift; cmd_run "$@" ;;
-	update-chroot) check_arch "${2:-}" && shift; cmd_update_chroot ;;
-	nuke)          check_arch "${2:-}" && shift; cmd_nuke ;;
-	clone)         check_arch "${2:-}" && shift; cmd_clone ;;
-	pull)          check_arch "${2:-}" && shift; cmd_pull ;;
+	setup)         check_name "${2:-}" && ARCH="${2:-$ARCH}" && shift; recalc_paths; cmd_setup ;;
+	setup-user)    { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_setup_user "$@" ;;
+	enter)         is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-} (use i486, x86_64, or setup a custom env)"; cmd_enter ;;
+	enter-user)    { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_enter_user "$@" ;;
+	umount)        is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_umount ;;
+	cook)          { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_cook "$@" ;;
+	run)           { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_run "$@" ;;
+	update-chroot) is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_update_chroot ;;
+	nuke)          is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_nuke ;;
+	clone)         check_name "${2:-}" && ARCH="${2:-$ARCH}" && shift; recalc_paths; cmd_clone ;;
+	pull)          is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_pull ;;
 	repos)         cmd_repos ;;
 	add-repo)      shift; cmd_add_repo "$@" ;;
-	qemu)          validate_arch "${2:-}" && shift; shift; cmd_qemu "$@" ;;
+	qemu)          { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_qemu "$@" ;;
 	log)           shift; cmd_log "$@" ;;
 	list)          shift; cmd_list "$@" ;;
 	search)        shift; cmd_search "$@" ;;
