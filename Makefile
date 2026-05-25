@@ -10,7 +10,7 @@ all:
 install:
 	install -Dm755 tazlab      $(DESTDIR)$(PREFIX)/bin/tazlab
 	install -Dm644 tazlab.conf $(DESTDIR)$(SYSCONFDIR)/slitaz/tazlab.conf
-	install -Dm644 README      $(DESTDIR)$(PREFIX)/share/doc/tazlab/README
+	install -Dm644 README.md   $(DESTDIR)$(PREFIX)/share/doc/tazlab/README.md
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/tazlab
