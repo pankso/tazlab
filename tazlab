@@ -94,6 +94,7 @@ PACKAGES="$SLITAZ_HOME/$ARCH/packages"
 CACHE="$SLITAZ_HOME/$ARCH/cache"
 LOG="$SLITAZ_HOME/$ARCH/log"
 WOK="$SLITAZ_HOME/$ARCH/wok"
+DISTRO="$SLITAZ_HOME/$ARCH/distro"
 # Shared between architectures
 SRC="$SLITAZ_HOME/src"
 REPOS="$SLITAZ_HOME/repos"
@@ -105,6 +106,7 @@ recalc_paths() {
 	CACHE="$SLITAZ_HOME/$ARCH/cache"
 	LOG="$SLITAZ_HOME/$ARCH/log"
 	WOK="$SLITAZ_HOME/$ARCH/wok"
+	DISTRO="$SLITAZ_HOME/$ARCH/distro"
 }
 
 usage() {
@@ -209,7 +211,7 @@ cmd_setup() {
 		*) [ -n "$ISO_URL" ] || die "no ISO_URL_${_arch_var} configured. Add to ~/.slitaz/tazlab.conf: ISO_URL_${_arch_var}=\"...\"" ;;
 	esac
 	mkdir -p "$SLITAZ_HOME/$ARCH" "$CHROOT" "$WOK" "$PACKAGES" \
-		"$CACHE" "$LOG" "$SRC" "$REPOS" "$SLITAZ_HOME/iso"
+		"$CACHE" "$LOG" "$SRC" "$REPOS" "$DISTRO" "$SLITAZ_HOME/iso"
 	msg "Environment: $ARCH"
 	iso="$SLITAZ_HOME/iso/$(basename "$ISO_URL")"
 	if [ ! -s "$iso" ]; then
@@ -256,7 +258,7 @@ EOF
 	if [ -n "$SUDO_USER" ]; then
 		chown "$SUDO_USER": "$SLITAZ_HOME" "$SLITAZ_HOME/$ARCH" \
 			"$PACKAGES" "$CACHE" "$LOG" \
-			"$WOK" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
+			"$WOK" "$DISTRO" "$SRC" "$REPOS" "$SLITAZ_HOME/iso" 2>/dev/null
 	fi
 	success "Done. Run: sudo tazlab enter $ARCH"
 }
@@ -268,22 +270,24 @@ cmd_mount() {
 	is_mounted dev     || mount --bind /dev     "$CHROOT/dev"
 	is_mounted dev/pts || mount --bind /dev/pts "$CHROOT/dev/pts"
 	# Bind shared dirs so builds persist on the host.
-	mkdir -p "$REPOS"
+	mkdir -p "$REPOS" "$DISTRO"
 	if [ -n "$SUDO_USER" ]; then
-		chown "$SUDO_USER": "$REPOS" 2>/dev/null
+		chown "$SUDO_USER": "$REPOS" "$DISTRO" 2>/dev/null
 	fi
 	mkdir -p "$CHROOT/home/slitaz/wok" \
 		"$CHROOT/home/slitaz/packages" \
 		"$CHROOT/home/slitaz/cache" \
 		"$CHROOT/home/slitaz/log" \
 		"$CHROOT/home/slitaz/src" \
-		"$CHROOT/home/slitaz/repos"
+		"$CHROOT/home/slitaz/repos" \
+		"$CHROOT/home/slitaz/distro"
 	is_mounted home/slitaz/wok      || mount --bind "$WOK"      "$CHROOT/home/slitaz/wok"
 	is_mounted home/slitaz/packages || mount --bind "$PACKAGES" "$CHROOT/home/slitaz/packages"
 	is_mounted home/slitaz/cache    || mount --bind "$CACHE"    "$CHROOT/home/slitaz/cache"
 	is_mounted home/slitaz/log      || mount --bind "$LOG"      "$CHROOT/home/slitaz/log"
 	is_mounted home/slitaz/src      || mount --bind "$SRC"      "$CHROOT/home/slitaz/src"
-	is_mounted home/slitaz/repos || mount --bind "$REPOS" "$CHROOT/home/slitaz/repos"
+	is_mounted home/slitaz/repos  || mount --bind "$REPOS"  "$CHROOT/home/slitaz/repos"
+	is_mounted home/slitaz/distro || mount --bind "$DISTRO" "$CHROOT/home/slitaz/distro"
 	cp -L /etc/resolv.conf "$CHROOT/etc/resolv.conf"
 }
 
@@ -292,7 +296,7 @@ cmd_umount() {
 		msg "Chroot still in use, keeping mounts."
 		return 0
 	fi
-	for m in 	home/slitaz/repos home/slitaz/src home/slitaz/log \
+	for m in 	home/slitaz/distro home/slitaz/repos home/slitaz/src home/slitaz/log \
 		home/slitaz/cache home/slitaz/packages home/slitaz/wok \
 		dev/pts dev sys proc; do
 		is_mounted "$m" && umount "$CHROOT/$m"
@@ -437,7 +441,7 @@ cmd_clean() {
 
 cmd_nuke() {
 	cmd_umount 2>/dev/null
-	rm -rf "$CHROOT" "$PACKAGES" "$CACHE" "$LOG"
+	rm -rf "$CHROOT" "$PACKAGES" "$CACHE" "$LOG" "$DISTRO"
 	msg "Env '$ARCH' wiped: $SLITAZ_HOME/$ARCH"
 	msg "Wok kept (clean build files with: tazlab enter $ARCH)."
 	msg "Shared dirs (repos, src, iso) kept."
@@ -455,6 +459,7 @@ cmd_status() {
 			echo "    Packages:  $(ls "$SLITAZ_HOME/$1/packages"/*.tazpkg 2>/dev/null | wc -l)"
 			echo "    Cache:     $(du -sh "$SLITAZ_HOME/$1/cache" 2>/dev/null | cut -f1)"
 			echo "    Log:       $(du -sh "$SLITAZ_HOME/$1/log" 2>/dev/null | cut -f1)"
+			echo "    Distro:    $(du -sh "$SLITAZ_HOME/$1/distro" 2>/dev/null | cut -f1)"
 		else
 			echo "    Status:    not set up (run: tazlab setup $1)"
 		fi

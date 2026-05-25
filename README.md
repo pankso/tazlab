@@ -66,13 +66,14 @@ sudo tazlab qemu i486              # Test your 32-bit ISO in QEMU
 
 ## 📁 Directory Layout
 
-By default, everything lives in `~/.slitaz/` on your host. Each environment has its own chroot, wok, packages, cache, and logs, while repos, src, and ISOs are shared across environments. Custom environments use the same layout as built-in archs (e.g. `mylab/chroot/`, `mylab/wok/`).
+By default, everything lives in `~/.slitaz/` on your host. Each environment has its own chroot, wok, packages, cache, logs, and distro build output, while repos, src, and ISOs are shared across environments. Custom environments use the same layout as built-in archs (e.g. `mylab/chroot/`, `mylab/wok/`).
 
 | Directory | Description |
 | :--- | :--- |
 | `<env>/chroot/` | SliTaz rootfs for that environment. |
 | `<env>/wok/` | Package recipes for that environment (bind-mounted). |
 | `<env>/packages/` | Built `.tazpkg` files. |
+| `<env>/distro/` | Distro/ISO build output (bind-mounted). |
 | `repos/` | Cloned Mercurial (HG) repos (cookutils, base-files, etc). |
 | `src/` | Downloaded source tarballs, shared. |
 | `iso/` | Cached SliTaz ISO images. |
@@ -98,7 +99,7 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 - `cook [env] <pkg>` — Cook a package inside the chroot.
 - `run [env] <cmd>` — Run an arbitrary command inside the chroot.
 - `update-chroot [env]` — Update all packages inside the chroot (`tazpkg upgrade`).
-- `nuke [env]` — Wipe an environment (chroot, packages, cache, logs). Wok kept.
+- `nuke [env]` — Wipe an environment (chroot, packages, cache, distro, logs). Wok kept.
 
 ### 🌐 Repositories
 - `clone [env]` — Clone the wok (per-environment) and extra repos into `~/.slitaz/`.
