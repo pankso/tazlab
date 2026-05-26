@@ -436,6 +436,7 @@ cmd_update_chroot() {
 
 cmd_clean() {
 	rm -rf "$CACHE"/* "$LOG"/*
+	touch "$CACHE/broken" "$CACHE/cooktime"
 	success "Cache and logs cleaned."
 }
 
