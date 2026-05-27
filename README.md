@@ -103,7 +103,7 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 
 ### 🌐 Repositories
 - `clone [env]` — Clone the wok (per-environment) and extra repos into `~/.slitaz/`.
-- `pull [env]` — Run `hg pull -u` on the wok and all cloned repositories.
+- `pull [env]` — Run `hg pull -u` on cloned repositories. Without `env`, pulls every per-environment wok plus shared repos; with `env`, only that environment's wok.
 - `repos` — Show the status of each cloned repository.
 - `add-repo <url>` — Add an extra HG repo to the tracking list.
 

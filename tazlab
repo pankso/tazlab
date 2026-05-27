@@ -235,12 +235,20 @@ cmd_setup() {
 	}
 	msg "Extracting rootfs to: $CHROOT"
 	for l in $layers; do echo "  layer: $l ($(stat -c%s "$l") bytes)"; done
+	# On extraction failure, wipe the partial chroot so the next 'setup' run
+	# isn't blocked by the "already set up" guard.
 	for l in $layers; do
-		decomp "$l" | ( cd "$CHROOT" && cpio -idmu --quiet ) \
-			|| { umount "$mnt"; rmdir "$mnt"; die "rootfs extraction failed"; }
+		if ! decomp "$l" | ( cd "$CHROOT" && cpio -idmu --quiet ); then
+			umount "$mnt"; rmdir "$mnt"
+			rm -rf "$CHROOT"
+			die "rootfs extraction failed (chroot wiped, retry: tazlab setup $ARCH)"
+		fi
 	done
 	umount "$mnt" && rmdir "$mnt"
-	[ -x "$CHROOT/bin/sh" ] || die "extracted chroot looks broken (no /bin/sh)"
+	if [ ! -x "$CHROOT/bin/sh" ]; then
+		rm -rf "$CHROOT"
+		die "extracted chroot looks broken: no /bin/sh (chroot wiped)"
+	fi
 	echo slitaz > "$CHROOT/etc/hostname"
 	# Create sudo user's home inside the chroot so 'cd' works out of the
 	# box, and provide a .profile with a welcome message.
@@ -442,7 +450,15 @@ cmd_clean() {
 }
 
 cmd_nuke() {
-	cmd_umount 2>/dev/null
+	# Refuse if anything still references the chroot — rm -rf can otherwise
+	# follow bind-mounts and wipe shared host dirs (wok, repos, src...).
+	if chroot_in_use; then
+		die "chroot in use by another session: $CHROOT (exit it first)"
+	fi
+	cmd_umount
+	if mount | grep -q " $CHROOT[/ ]"; then
+		die "mounts still present under $CHROOT, refusing to nuke"
+	fi
 	rm -rf "$CHROOT" "$PACKAGES" "$CACHE" "$LOG" "$DISTRO"
 	msg "Env '$ARCH' wiped: $SLITAZ_HOME/$ARCH"
 	msg "Wok kept (clean build files with: tazlab enter $ARCH)."
@@ -813,10 +829,18 @@ cmd_log() {
 
 cmd_list() {
 	[ -d "$WOK" ] || die "no wok for $ARCH. Run: tazlab clone $ARCH"
-	ls "$WOK" ${1:+"$WOK/$1*"} 2>/dev/null | while read -r d; do
+	pat="${1:-}*"
+	count=0
+	for d in "$WOK"/$pat; do
 		[ -f "$d/receipt" ] || continue
 		basename "$d"
+		count=$((count + 1))
 	done
+	if [ -n "${1:-}" ]; then
+		msg "$count recipe(s) matching '$pat' in $ARCH wok"
+	else
+		msg "$count recipe(s) in $ARCH wok"
+	fi
 }
 
 cmd_search() {
@@ -879,16 +903,16 @@ case "$1" in
 	repos)         cmd_repos ;;
 	add-repo)      shift; cmd_add_repo "$@" ;;
 	qemu)          { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_qemu "$@" ;;
-	log)           shift; cmd_log "$@" ;;
-	list)          shift; cmd_list "$@" ;;
-	search)        shift; cmd_search "$@" ;;
-	info)          shift; cmd_info "$@" ;;
-	edit)          shift; cmd_edit "$@" ;;
-	deps)          shift; cmd_deps "$@" ;;
+	log)           { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_log "$@" ;;
+	list)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_list "$@" ;;
+	search)        { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_search "$@" ;;
+	info)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_info "$@" ;;
+	edit)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_edit "$@" ;;
+	deps)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_deps "$@" ;;
 	check)         cmd_check ;;
 	config)        cmd_config ;;
 	init)          cmd_init ;;
-	clean)         validate_arch "${2:-}" && shift; cmd_clean ;;
+	clean)         if [ -n "${2:-}" ]; then is_env "$2" || die "unknown env: $2"; shift; fi; cmd_clean ;;
 	status)        cmd_status ;;
 	""|help|-h|--help|-v|--version) usage ;;
 	*) die "unknown command: $1 (try: tazlab help)" ;;
