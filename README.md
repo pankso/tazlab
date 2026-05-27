@@ -111,7 +111,7 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 - `qemu [env] [iso]` — Run a SliTaz ISO in QEMU (env selects the right ISO and QEMU binary).
 
 ### 🔍 Inspection
-- `log <pkg>` — Show the build log (runs `tail -f` if currently building).
+- `log [env] <pkg>` — Show the build log (runs `tail -f` if currently building).
 - `list [env] [filter]` — List package recipes available in the wok.
 - `search [env] <pat>` — Search for a pattern across all receipts.
 - `info [env] <pkg>` — Show detailed package receipt metadata.
@@ -123,7 +123,7 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 - `config` — Show effective configuration (all variables resolved).
 - `init` — Interactive first-time setup wizard.
 - `status` — Show status of all environments (chroot, wok, packages, cache) and shared dirs.
-- `clean` — Clean the build cache and logs.
+- `clean [env]` — Clean the build cache and logs for an environment.
 
 ---
 
