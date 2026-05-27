@@ -135,7 +135,8 @@ Commands:
 
   Repos:
     clone [env]     Clone wok + extra repos (REPOS_LIST)
-    pull [env]      hg pull -u on wok and all cloned repos
+    pull [env]      hg pull -u on wok(s) and shared repos
+                    (no env: all per-env woks; with env: that wok only)
     repos           Show status of each cloned repo
     add-repo <url>  Add an extra HG repo to REPOS_LIST in tazlab.conf
 
@@ -668,17 +669,31 @@ cmd_clone() {
 }
 
 cmd_pull() {
+	target_env="${1:-}"
 	count=0
 
 	_pull_one() {
 		[ -d "$1/.hg" ] || return 0
-		name=$(basename "$1")
+		# Label per-env woks as "<env>/wok" to disambiguate in output.
+		case "$1" in
+			"$SLITAZ_HOME"/*/wok)
+				name=$(echo "$1" | sed "s|$SLITAZ_HOME/||") ;;
+			*)  name=$(basename "$1") ;;
+		esac
 		msg "Pulling: $name"
 		hg -R "$1" pull -u || warn "pull failed for $name"
 		count=$((count + 1))
 	}
 
-	_pull_one "$WOK"
+	if [ -n "$target_env" ]; then
+		_pull_one "$SLITAZ_HOME/$target_env/wok"
+	else
+		# All per-env woks that are hg clones (skips non-wok dirs like iso/, src/).
+		for w in "$SLITAZ_HOME"/*/wok; do
+			_pull_one "$w"
+		done
+	fi
+
 	for r in "$REPOS"/*; do
 		_pull_one "$r"
 	done
@@ -860,7 +875,7 @@ case "$1" in
 	update-chroot) is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_update_chroot ;;
 	nuke)          is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_nuke ;;
 	clone)         check_name "${2:-}" && ARCH="${2:-$ARCH}" && shift; recalc_paths; cmd_clone ;;
-	pull)          is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_pull ;;
+	pull)          shift; if [ -n "${1:-}" ]; then is_env "$1" || die "unknown env: $1"; cmd_pull "$1"; else cmd_pull; fi ;;
 	repos)         cmd_repos ;;
 	add-repo)      shift; cmd_add_repo "$@" ;;
 	qemu)          { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_qemu "$@" ;;
