@@ -109,6 +109,117 @@ recalc_paths() {
 	DISTRO="$SLITAZ_HOME/$ARCH/distro"
 }
 
+# --- Build from packages (setup --build) ----------------------------
+
+FLAVOR_base="slitaz-base-files busybox glibc-base gcc-lib-base gcc-lib-math \
+    bash ncurses ncurses-common readline zlib linux-api-headers \
+    spk cookutils"
+FLAVOR_slitaz_ai="$FLAVOR_base \
+    llama.cpp llama.cpp-tools llama3pure"
+
+_find_tazpkg() {
+	local name="$1" src="$2" f pkg_name
+	for f in "$src/${name}"-*.tazpkg; do
+		[ -f "$f" ] || continue
+		pkg_name=$(cpio --quiet -i --to-stdout receipt < "$f" 2>/dev/null \
+			| grep '^PACKAGE=' | head -1 | sed 's/^PACKAGE=//;s/"//g')
+		[ "$pkg_name" = "$name" ] && { echo "$f"; return 0; }
+	done
+}
+
+_install_tazpkg() {
+	local pkg_file="$1" dest="$2" name tmp
+	name=$(basename "$pkg_file" .tazpkg)
+	tmp=$(mktemp -d) || die "mktemp failed"
+	( cd "$tmp" && cpio --quiet -idm < "$pkg_file" 2>/dev/null )
+	if [ -f "$tmp/fs.tar.xz" ]; then
+		tar -xJf "$tmp/fs.tar.xz" -C "$dest" 2>/dev/null \
+			|| { rm -rf "$tmp"; die "tar extract failed: $name"; }
+	elif [ -f "$tmp/fs.cpio.lzma" ]; then
+		unlzma -c "$tmp/fs.cpio.lzma" | ( cd "$tmp" && cpio --quiet -idm 2>/dev/null )
+		[ -d "$tmp/fs" ] || { rm -rf "$tmp"; die "cpio: no fs/ dir in: $name"; }
+		cp -a "$tmp/fs/." "$dest/"
+	else
+		rm -rf "$tmp"; die "unknown fs format in: $name"
+	fi
+	rm -rf "$tmp"
+}
+
+_cmd_setup_build() {
+	local pkg_arch="$1" flavor="$2"
+	local pkg_src="$SLITAZ_HOME/$pkg_arch/packages"
+	local pkgs missing="" name f count=0
+	case "$flavor" in
+		base)      pkgs="$FLAVOR_base" ;;
+		slitaz-ai) pkgs="$FLAVOR_slitaz_ai" ;;
+		*) die "unknown flavor: $flavor (base, slitaz-ai)" ;;
+	esac
+	[ -d "$pkg_src" ] || die "packages dir not found: $pkg_src"
+	chroot_in_use && die "a process is running in $CHROOT — exit it first"
+	if mount | grep -q " $CHROOT[/ ]"; then
+		warn "mounts found under $CHROOT — unmounting"
+		for m in home/slitaz/distro home/slitaz/repos home/slitaz/src \
+		          home/slitaz/log home/slitaz/cache home/slitaz/packages \
+		          home/slitaz/wok dev/pts dev sys proc; do
+			mountpoint -q "$CHROOT/$m" 2>/dev/null && umount "$CHROOT/$m"
+		done
+		mount | grep -q " $CHROOT[/ ]" && die "could not unmount $CHROOT"
+	fi
+	for name in $pkgs; do
+		f=$(_find_tazpkg "$name" "$pkg_src")
+		[ -n "$f" ] || missing="$missing $name"
+	done
+	[ -n "$missing" ] && { warn "missing:$missing"; die "cook missing packages first"; }
+	[ -d "$CHROOT" ] && { msg "Wiping: $CHROOT"; rm -rf "$CHROOT"; }
+	mkdir -p "$CHROOT" "$SLITAZ_HOME/$ARCH/wok" "$SLITAZ_HOME/$ARCH/packages" \
+		"$SLITAZ_HOME/$ARCH/cache" "$SLITAZ_HOME/$ARCH/log" \
+		"$SLITAZ_HOME/$ARCH/distro" "$SRC" "$REPOS"
+	msg "Building chroot '$ARCH'  flavor: $flavor  pkgs from: $pkg_arch"
+	echo ""
+	for name in $pkgs; do
+		f=$(_find_tazpkg "$name" "$pkg_src")
+		printf " ${C_CYAN}→${C_NONE} %-30s" "$name "
+		_install_tazpkg "$f" "$CHROOT"
+		echo "${C_GREEN}ok${C_NONE}"
+		count=$((count + 1))
+	done
+	echo ""
+	[ -e "$CHROOT/lib64" ] || ln -sf lib "$CHROOT/lib64"
+	chroot "$CHROOT" /bin/busybox --install -s 2>/dev/null \
+		|| warn "busybox --install failed"
+	echo "slitaz" > "$CHROOT/etc/hostname"
+	[ -c "$CHROOT/dev/null" ] || mknod -m 666 "$CHROOT/dev/null" c 1 3
+	[ -c "$CHROOT/dev/zero" ] || mknod -m 666 "$CHROOT/dev/zero" c 1 5
+	mkdir -p "$CHROOT/tmp" && chmod 1777 "$CHROOT/tmp"
+	if [ -n "$SUDO_USER" ]; then
+		mkdir -p "$CHROOT/home/$SUDO_USER"
+		cat > "$CHROOT/home/$SUDO_USER/.profile" <<PROFILE
+echo ""
+echo "Welcome to SliTaz Chroot - Env: $ARCH"
+echo ""
+PROFILE
+		chown "$SUDO_USER": "$SLITAZ_HOME/$ARCH" \
+			"$SLITAZ_HOME/$ARCH/packages" "$SLITAZ_HOME/$ARCH/cache" \
+			"$SLITAZ_HOME/$ARCH/log" "$CHROOT/home/$SUDO_USER" \
+			"$CHROOT/home/$SUDO_USER/.profile" 2>/dev/null
+	fi
+	success "$count packages installed into $CHROOT"
+	msg "Next: sudo tazlab setup-user $ARCH"
+}
+
+cmd_flavors() {
+	echo "Flavors (tazlab setup [env] --build [flavor]):"
+	echo ""
+	printf "  ${C_CYAN}base${C_NONE}      minimal: init libc shell ncurses zlib\n"
+	for p in $FLAVOR_base; do printf "      %s\n" "$p"; done
+	echo ""
+	printf "  ${C_CYAN}slitaz-ai${C_NONE} base + llama.cpp + llama3pure\n"
+	for p in $FLAVOR_slitaz_ai; do
+		echo "$FLAVOR_base" | tr ' ' '\n' | grep -qx "$p" && continue
+		printf "      %s\n" "$p"
+	done
+}
+
 usage() {
 	cat <<EOF
 Usage: tazlab <command> [env] [args]
@@ -204,6 +315,17 @@ decomp() {
 # --- Commands ---------------------------------------------------------
 
 cmd_setup() {
+	local _build="" _pkg_arch="$ARCH" _flavor="base" _a
+	for _a in "$@"; do
+		case "$_a" in
+			--build)  _build=1 ;;
+			--pkgs=*) _pkg_arch="${_a#--pkgs=}" ;;
+			--*)      die "unknown setup option: $_a" ;;
+			*)        _flavor="$_a" ;;
+		esac
+	done
+	[ -n "$_build" ] && { _cmd_setup_build "$_pkg_arch" "$_flavor"; return; }
+
 	[ -d "$CHROOT/bin" ] && die "chroot already set up at: $CHROOT"
 	_arch_var=$(printf '%s' "$ARCH" | tr '-' '_')
 	ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
@@ -316,7 +438,7 @@ cmd_umount() {
 cmd_enter() {
 	cmd_mount
 	unshare -u chroot "$CHROOT" /bin/sh -c \
-		'hostname slitaz; exec /bin/sh -l'
+		'hostname slitaz; HOME=/root; export HOME; exec /bin/sh -l'
 	cmd_umount
 }
 
@@ -889,7 +1011,12 @@ case "$1" in
 esac
 
 case "$1" in
-	setup)         check_name "${2:-}" && ARCH="${2:-$ARCH}" && shift; recalc_paths; cmd_setup ;;
+	setup)
+		case "${2:-}" in
+			""| --*) shift ;;
+			*) check_name "${2:-}" && ARCH="${2:-$ARCH}"; shift 2 ;;
+		esac
+		recalc_paths; cmd_setup "$@" ;;
 	setup-user)    { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_setup_user "$@" ;;
 	enter)         is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-} (use i486, x86_64, or setup a custom env)"; cmd_enter ;;
 	enter-user)    { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_enter_user "$@" ;;
@@ -909,6 +1036,7 @@ case "$1" in
 	info)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_info "$@" ;;
 	edit)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_edit "$@" ;;
 	deps)          { [ -n "${2:-}" ] && is_env "$2" && shift; } || true; shift; cmd_deps "$@" ;;
+	flavors)       cmd_flavors ;;
 	check)         cmd_check ;;
 	config)        cmd_config ;;
 	init)          cmd_init ;;

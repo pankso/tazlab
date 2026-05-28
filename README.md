@@ -36,10 +36,29 @@ Clone the wok and essential repositories, then download and extract the SliTaz r
 tazlab clone i486                    # Clone wok + essential repos (32-bit)
 tazlab clone x86_64                  # Clone wok + essential repos (64-bit)
 tazlab clone mylab                   # Clone wok for a custom env
-sudo tazlab setup i486              # Setup 32-bit chroot
-sudo tazlab setup x86_64            # Setup 64-bit chroot
+sudo tazlab setup i486              # Setup 32-bit chroot (downloads ISO)
+sudo tazlab setup x86_64            # Setup 64-bit chroot (downloads ISO)
 sudo tazlab setup mylab             # Setup custom env (needs ISO_URL_mylab in config)
 ```
+
+### 3b. Setup from local packages (no ISO)
+If you already have built `.tazpkg` files in `<env>/packages/`, you can rebuild a chroot directly from them without downloading an ISO. This is the fastest way to recover a broken chroot or spin up a specialized environment:
+```bash
+tazlab flavors                                          # List available flavors
+sudo tazlab setup x86_64 --build                        # Rebuild x86_64 base chroot
+sudo tazlab setup x86_64 --build base                   # Same (explicit flavor)
+sudo tazlab setup slitaz-ai --build --pkgs=x86_64 slitaz-ai  # New env, packages from x86_64
+sudo tazlab setup-user slitaz-ai                        # Create unprivileged user inside
+```
+
+Two flavors are built in:
+
+| Flavor | Contents |
+| :--- | :--- |
+| `base` | slitaz-base-files, busybox, glibc, gcc-lib, bash, ncurses, readline, zlib, linux-api-headers, spk, cookutils |
+| `slitaz-ai` | `base` + llama.cpp, llama.cpp-tools, llama3pure |
+
+`--pkgs=<env>` lets you source packages from a different environment (e.g. build a `slitaz-ai/` chroot using packages cooked in `x86_64/`).
 
 ### 4. Enter the Chroot
 ```bash
@@ -91,7 +110,7 @@ TazLab is split into logical command groups. Run `tazlab help` for a quick overv
 ### 📦 Chroot Management
 All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a custom name). If omitted, the default environment from your config is used.
 
-- `setup [env]` — Download SliTaz ISO and extract rootfs to chroot.
+- `setup [env] [--build [--pkgs=env] [flavor]]` — Download SliTaz ISO and extract rootfs to chroot. With `--build`, rebuild from local packages instead (no ISO needed). See flavors below.
 - `setup-user [env] [u]` — Create an unprivileged user in the chroot.
 - `enter [env]` — Mount and enter the chroot as `root`.
 - `enter-user [env] [u]` — Mount and enter as an unprivileged user.
@@ -117,6 +136,9 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 - `info [env] <pkg>` — Show detailed package receipt metadata.
 - `edit [env] <pkg>` — Open a package receipt in `$EDITOR`.
 - `deps [env] <pkg>` — Show build and runtime dependencies of a package.
+
+### 🍱 Flavors
+- `flavors` — List built-in flavors and their package contents (used with `setup --build`).
 
 ### 🧹 Maintenance
 - `check` — Verify all host dependencies are installed.

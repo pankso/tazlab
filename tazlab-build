@@ -1,0 +1,72 @@
+#!/bin/sh
+# tazlab-build - thin wrapper around tazlab setup --build
+# Kept for convenience; all logic lives in tazlab.
+#
+# Usage: tazlab-build [env] [--pkgs=env] build [flavor]
+#        tazlab-build [env] [--pkgs=env] list  [flavor]
+#        tazlab-build flavors
+#
+# Copyright (C) 2026 SliTaz GNU/Linux - BSD License
+# Author: Christophe Lincoln <pankso@slitaz.org>
+#
+
+SELF="$(dirname "$0")/tazlab"
+[ -x "$SELF" ] || SELF="$(command -v tazlab)" || { echo "tazlab not found" >&2; exit 1; }
+
+# Parse [env] and [--pkgs=env] before the sub-command.
+_env="" _pkgs="" _rest=""
+_is_cmd() { case "$1" in build|list|flavors|help|--help|-h) return 0;; esac; return 1; }
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--pkgs=*) _pkgs="$1"; shift ;;
+		--*)      _rest="$_rest $1"; shift ;;
+		*)
+			_is_cmd "$1" && break
+			[ -z "$_env" ] && _env="$1" || _rest="$_rest $1"
+			shift ;;
+	esac
+done
+
+case "${1:-}" in
+	build)
+		shift
+		# tazlab setup [env] --build [--pkgs=env] [flavor]
+		exec sudo "$SELF" setup $_env --build $_pkgs $_rest "$@" ;;
+	list)
+		shift
+		flavor="${1:-base}"
+		# Re-use tazlab's flavor list via flavors output (read-only, no sudo).
+		"$SELF" flavors | grep -A 99 "^  ${flavor}" | head -20
+		# Then check packages.
+		. /etc/slitaz/tazlab.conf 2>/dev/null
+		. "$HOME/.slitaz/tazlab.conf" 2>/dev/null
+		: ${SLITAZ_HOME:=$HOME/.slitaz}
+		: ${ARCH:=x86_64}
+		[ -n "$_env" ] && ARCH="$_env"
+		pkg_arch="${_pkgs#--pkgs=}"; : ${pkg_arch:=$ARCH}
+		PACKAGES="$SLITAZ_HOME/$pkg_arch/packages"
+		echo ""
+		echo "Packages in $PACKAGES:"
+		found=0; missing=0
+		# Get package list from flavors command output (name lines after header).
+		for name in $("$SELF" flavors | awk "/^  ${flavor}/{found=1} found && /^      /{print \$1} found && /^  [^ ]/{if(found>1)exit; found++}"); do
+			f=$(ls "$PACKAGES/${name}"-*.tazpkg 2>/dev/null | head -1)
+			if [ -n "$f" ]; then
+				printf "  \033[1;32m✓\033[0m %s\n" "$(basename "$f")"
+				found=$((found+1))
+			else
+				printf "  \033[1;31m✗\033[0m %s\n" "$name"
+				missing=$((missing+1))
+			fi
+		done
+		echo "  Found: $found  Missing: $missing" ;;
+	flavors)
+		exec "$SELF" flavors ;;
+	help|--help|-h|"")
+		echo "Usage: tazlab-build [env] [--pkgs=env] build|list|flavors [flavor]"
+		echo "Wrapper around: tazlab setup [env] --build [--pkgs=env] [flavor]"
+		echo "See: tazlab help" ;;
+	*)
+		echo "unknown command: $1" >&2; exit 1 ;;
+esac
