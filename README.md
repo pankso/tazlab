@@ -55,10 +55,22 @@ Two flavors are built in:
 
 | Flavor | Contents |
 | :--- | :--- |
-| `base` | slitaz-base-files, busybox, glibc, gcc-lib, bash, ncurses, readline, zlib, linux-api-headers, spk, cookutils |
+| `base` | slitaz-base-files, busybox, glibc, gcc-lib, bash, ncurses, readline, zlib, linux-api-headers, lzma, gettext-base, spk, tazpkg, cookutils |
 | `slitaz-ai` | `base` + llama.cpp, llama.cpp-tools, llama3pure |
 
 `--pkgs=<env>` lets you source packages from a different environment (e.g. build a `slitaz-ai/` chroot using packages cooked in `x86_64/`).
+
+### 3c. Mirror all packages into an env (`sync`)
+A chroot built with `--build` only contains the flavor's packages. To make the **whole** package set of another arch installable from inside it (offline), `sync` rsyncs one env's `packages/` dir into another's on the host. Since `<env>/packages/` is bind-mounted at `/home/slitaz/packages` in the chroot, the packages appear inside it live — **no unmount needed**:
+```bash
+sudo tazlab sync slitaz-ai x86_64        # rsync x86_64/packages -> slitaz-ai/packages
+sudo tazlab sync slitaz-ai               # same (src defaults to setup --build's arch)
+sudo tazlab setup slitaz-ai --build --pkgs=x86_64 --sync slitaz-ai  # build + sync
+```
+`sync` is a pure host operation (it writes `~/.slitaz/<env>/packages/`, not the chroot rootfs) and also points the env's tazpkg at `/home/slitaz/packages/`, invalidating its freshness marker. It is never run automatically — `setup --build` only suggests it. Then, inside the chroot:
+```bash
+tazpkg recharge && tazpkg get-install nano
+```
 
 ### 4. Enter the Chroot
 ```bash

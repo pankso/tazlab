@@ -3,6 +3,8 @@
 # Kept for convenience; all logic lives in tazlab.
 #
 # Usage: tazlab-build [env] [--pkgs=env] build [flavor]
+#        tazlab-build [env] [--pkgs=env] [--sync] build [flavor]
+#        tazlab-build [env] sync [arch]
 #        tazlab-build [env] [--pkgs=env] list  [flavor]
 #        tazlab-build flavors
 #
@@ -15,7 +17,7 @@ SELF="$(dirname "$0")/tazlab"
 
 # Parse [env] and [--pkgs=env] before the sub-command.
 _env="" _pkgs="" _rest=""
-_is_cmd() { case "$1" in build|list|flavors|help|--help|-h) return 0;; esac; return 1; }
+_is_cmd() { case "$1" in build|sync|list|flavors|help|--help|-h) return 0;; esac; return 1; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -33,6 +35,10 @@ case "${1:-}" in
 		shift
 		# tazlab setup [env] --build [--pkgs=env] [flavor]
 		exec sudo "$SELF" setup $_env --build $_pkgs $_rest "$@" ;;
+	sync)
+		shift
+		# tazlab sync [env] [arch]
+		exec sudo "$SELF" sync $_env "$@" ;;
 	list)
 		shift
 		flavor="${1:-base}"
@@ -64,8 +70,8 @@ case "${1:-}" in
 	flavors)
 		exec "$SELF" flavors ;;
 	help|--help|-h|"")
-		echo "Usage: tazlab-build [env] [--pkgs=env] build|list|flavors [flavor]"
-		echo "Wrapper around: tazlab setup [env] --build [--pkgs=env] [flavor]"
+		echo "Usage: tazlab-build [env] [--pkgs=env] [--sync] build|sync|list|flavors [flavor]"
+		echo "Wrapper around: tazlab setup [env] --build [--pkgs=env] [--sync] [flavor]"
 		echo "See: tazlab help" ;;
 	*)
 		echo "unknown command: $1" >&2; exit 1 ;;

@@ -113,7 +113,7 @@ recalc_paths() {
 
 FLAVOR_base="slitaz-base-files busybox glibc-base gcc-lib-base gcc-lib-math \
     bash ncurses ncurses-common readline zlib linux-api-headers \
-    spk cookutils"
+    lzma gettext-base spk tazpkg cookutils"
 FLAVOR_slitaz_ai="$FLAVOR_base \
     llama.cpp llama.cpp-tools llama3pure"
 
@@ -203,8 +203,13 @@ PROFILE
 			"$SLITAZ_HOME/$ARCH/log" "$CHROOT/home/$SUDO_USER" \
 			"$CHROOT/home/$SUDO_USER/.profile" 2>/dev/null
 	fi
+	# Remember which packages dir this chroot was built from, so `tazlab sync`
+	# can default its source without re-passing --pkgs=.
+	echo "$pkg_arch" > "$SLITAZ_HOME/$ARCH/pkgsrc"
+	[ -n "$SUDO_USER" ] && chown "$SUDO_USER": "$SLITAZ_HOME/$ARCH/pkgsrc" 2>/dev/null
 	success "$count packages installed into $CHROOT"
 	msg "Next: sudo tazlab setup-user $ARCH"
+	msg "Optional: sudo tazlab sync $ARCH  (mirror all '$pkg_arch' packages into the chroot)"
 }
 
 cmd_flavors() {
@@ -241,6 +246,8 @@ Commands:
     cook [env] <p>  Cook a package inside the chroot (root)
     run [env] <cmd> Run an arbitrary command inside the chroot
     update-chroot [e]Update all packages inside the chroot (tazpkg upgrade)
+    sync [env][src] rsync <src>/packages into <env>/packages + set tazpkg mirror
+                    (src defaults to the arch used by setup --build)
     nuke [env]      Wipe chroot+packages+cache+log for an environment (wok kept)
     status [env]    Show chroot, wok, packages, repos status
 
@@ -315,16 +322,22 @@ decomp() {
 # --- Commands ---------------------------------------------------------
 
 cmd_setup() {
-	local _build="" _pkg_arch="$ARCH" _flavor="base" _a
+	local _build="" _sync="" _pkg_arch="$ARCH" _flavor="base" _a
 	for _a in "$@"; do
 		case "$_a" in
 			--build)  _build=1 ;;
+			--sync)   _sync=1 ;;
 			--pkgs=*) _pkg_arch="${_a#--pkgs=}" ;;
 			--*)      die "unknown setup option: $_a" ;;
 			*)        _flavor="$_a" ;;
 		esac
 	done
-	[ -n "$_build" ] && { _cmd_setup_build "$_pkg_arch" "$_flavor"; return; }
+	[ -n "$_sync" ] && [ -z "$_build" ] && die "--sync requires --build (or use: tazlab sync $ARCH)"
+	[ -n "$_build" ] && {
+		_cmd_setup_build "$_pkg_arch" "$_flavor"
+		[ -n "$_sync" ] && cmd_sync "$_pkg_arch"
+		return
+	}
 
 	[ -d "$CHROOT/bin" ] && die "chroot already set up at: $CHROOT"
 	_arch_var=$(printf '%s' "$ARCH" | tr '-' '_')
@@ -565,6 +578,52 @@ cmd_update_chroot() {
 	success "Chroot updated."
 }
 
+# Host-side mirror: rsync one env's packages dir into another's, so the
+# target env's chroot (which bind-mounts $PACKAGES at /home/slitaz/packages)
+# has the whole set available. Pure host operation — no unmount needed, since
+# we write the host dir, not the chroot rootfs. Then point tazpkg at it so
+# `tazpkg recharge && tazpkg get-install <pkg>` works offline.
+# Not run by setup unless --sync is passed; setup suggests it instead.
+cmd_sync() {
+	local src_arch="${1:-}" src dest n f
+	# Default source arch: the one recorded at build time, else current ARCH.
+	if [ -z "$src_arch" ]; then
+		[ -r "$SLITAZ_HOME/$ARCH/pkgsrc" ] \
+			&& src_arch=$(cat "$SLITAZ_HOME/$ARCH/pkgsrc")
+		: ${src_arch:=$ARCH}
+	fi
+	src="$SLITAZ_HOME/$src_arch/packages"
+	dest="$PACKAGES"   # = $SLITAZ_HOME/$ARCH/packages
+	command -v rsync >/dev/null 2>&1 || die "rsync not installed on host"
+	[ -d "$src" ] || die "no packages dir: $src"
+	n=$(ls "$src"/*.tazpkg 2>/dev/null | wc -l)
+	[ "$n" -gt 0 ] || die "no .tazpkg in $src (cook some packages first)"
+	for f in packages.list packages.info packages.md5 packages.equiv; do
+		[ -f "$src/$f" ] \
+			|| warn "missing index: $f (regenerate with: cook pkgdb)"
+	done
+	if [ "$src" = "$dest" ]; then
+		# Same env: packages already in $PACKAGES, nothing to copy — just
+		# (re)point tazpkg at them below.
+		msg "$n packages already in $ARCH; configuring mirror only"
+	else
+		mkdir -p "$dest"
+		msg "Syncing $n packages (host): $src_arch -> $ARCH"
+		rsync -a "$src"/ "$dest"/ || die "rsync failed"
+		[ -n "$SUDO_USER" ] && chown "$SUDO_USER": "$dest" 2>/dev/null
+	fi
+	# Point the env's chroot at its (now-mirrored) local packages dir. Plain
+	# path: recharge/get-install use cp for non-http mirrors. Invalidate IDs
+	# so the next recharge re-reads the list instead of seeing "up to date".
+	if [ -d "$CHROOT/bin" ]; then
+		mkdir -p "$CHROOT/var/lib/tazpkg"
+		echo "/home/slitaz/packages/" > "$CHROOT/var/lib/tazpkg/mirror"
+		rm -f "$CHROOT/var/lib/tazpkg/IDs" "$CHROOT/var/lib/tazpkg/ID"
+		msg "tazpkg mirror set; inside chroot: tazpkg recharge && tazpkg get-install <pkg>"
+	fi
+	success "$n packages synced: $src_arch -> $ARCH packages"
+}
+
 cmd_clean() {
 	rm -rf "$CACHE"/* "$LOG"/*
 	touch "$CACHE/broken" "$CACHE/cooktime"
@@ -660,6 +719,7 @@ cmd_check() {
 	_check chroot
 	_check sudo
 	_check mktemp
+	_check rsync
 
 	# Qemu is optional.
 	command -v qemu-system-x86_64 >/dev/null 2>&1 \
@@ -1006,7 +1066,7 @@ cmd_deps() {
 
 # Auto-elevate for commands that touch mounts, chroot, or hardware.
 case "$1" in
-	setup|setup-user|enter|enter-user|umount|cook|run|update-chroot|nuke|qemu)
+	setup|setup-user|enter|enter-user|umount|cook|run|update-chroot|nuke|qemu|sync)
 		need_root "$@" ;;
 esac
 
@@ -1024,6 +1084,7 @@ case "$1" in
 	cook)          { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_cook "$@" ;;
 	run)           { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_run "$@" ;;
 	update-chroot) is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_update_chroot ;;
+	sync)          { [ -n "${2:-}" ] && is_env "$2" && ARCH="$2" && shift; } || true; shift; cmd_sync "$@" ;;
 	nuke)          is_env "${2:-}" && ARCH="${2:-$ARCH}" && shift || die "unknown env: ${2:-}"; cmd_nuke ;;
 	clone)         check_name "${2:-}" && ARCH="${2:-$ARCH}" && shift; recalc_paths; cmd_clone ;;
 	pull)          shift; if [ -n "${1:-}" ]; then is_env "$1" || die "unknown env: $1"; cmd_pull "$1"; else cmd_pull; fi ;;
