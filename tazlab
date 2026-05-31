@@ -127,6 +127,19 @@ _find_tazpkg() {
 	done
 }
 
+# Read one KEY="value" field from a tazpkg receipt without executing it.
+# Joins backslash-continued lines and strips surrounding quotes. Safe against
+# receipt bashisms that would break `. receipt` under /bin/sh.
+_receipt_var() {
+	awk -v k="$2" '
+		index($0, k "=") == 1 {
+			v = substr($0, length(k) + 2)
+			while (v ~ /\\$/) { sub(/\\$/, "", v); if (getline n <= 0) break; v = v " " n }
+			gsub(/^"|"$/, "", v)
+			print v; exit
+		}' "$1"
+}
+
 _install_tazpkg() {
 	local pkg_file="$1" dest="$2" name tmp
 	name=$(basename "$pkg_file" .tazpkg)
@@ -138,9 +151,43 @@ _install_tazpkg() {
 	elif [ -f "$tmp/fs.cpio.lzma" ]; then
 		unlzma -c "$tmp/fs.cpio.lzma" | ( cd "$tmp" && cpio --quiet -idm 2>/dev/null )
 		[ -d "$tmp/fs" ] || { rm -rf "$tmp"; die "cpio: no fs/ dir in: $name"; }
-		cp -a "$tmp/fs/." "$dest/"
+		# --remove-destination: a later package may ship a regular file where an
+		# earlier one left a symlink (e.g. cookutils /bin/uname over busybox's
+		# /bin/uname -> busybox). Without this, cp follows the symlink and
+		# overwrites the *target* (/bin/busybox), corrupting the chroot.
+		cp -a --remove-destination "$tmp/fs/." "$dest/"
 	else
 		rm -rf "$tmp"; die "unknown fs format in: $name"
+	fi
+	# Register the package in the chroot's tazpkg DB so spk/tazpkg inside the
+	# chroot sees it as installed (deps resolve, `tazpkg list` works, recook ok).
+	if [ -f "$tmp/receipt" ]; then
+		local pkg ver cat short web tags sizes deps psum db idir
+		# Read receipt fields without *sourcing* it: receipts use bashisms
+		# (e.g. ${TARBALL:0:1}) that abort under /bin/sh=dash, yielding empty
+		# values. awk joins backslash-continued lines and strips the quotes.
+		pkg=$(_receipt_var "$tmp/receipt" PACKAGE)
+		ver=$(_receipt_var "$tmp/receipt" VERSION)$(_receipt_var "$tmp/receipt" EXTRAVERSION)
+		cat=$(_receipt_var "$tmp/receipt" CATEGORY)
+		short=$(_receipt_var "$tmp/receipt" SHORT_DESC)
+		web=$(_receipt_var "$tmp/receipt" WEB_SITE)
+		tags=$(_receipt_var "$tmp/receipt" TAGS)
+		sizes=$(echo "$(_receipt_var "$tmp/receipt" PACKED_SIZE) $(_receipt_var "$tmp/receipt" UNPACKED_SIZE)" | sed 's|\.0||g')
+		deps=$(_receipt_var "$tmp/receipt" DEPENDS | tr -s ' ')
+		psum=$(md5sum "$pkg_file" | cut -d' ' -f1)
+		db="$dest/var/lib/tazpkg"
+		idir="$db/installed/$pkg"
+		mkdir -p "$idir"
+		for fl in receipt files.list md5sum description.txt; do
+			[ -f "$tmp/$fl" ] && cp -a "$tmp/$fl" "$idir/$fl"
+		done
+		# Tab-separated index line; replace any stale entry for this package.
+		[ -f "$db/installed.info" ] && sed -i "/^$pkg	/d" "$db/installed.info"
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+			"$pkg" "$ver" "$cat" "$short" "$web" "$tags" "$sizes" "$deps" "$psum" \
+			>> "$db/installed.info"
+		sed -i "/ $(basename "$pkg_file")\$/d" "$db/installed.md5" 2>/dev/null
+		printf '%s  %s\n' "$psum" "$(basename "$pkg_file")" >> "$db/installed.md5"
 	fi
 	rm -rf "$tmp"
 }
@@ -191,6 +238,13 @@ _cmd_setup_build() {
 	[ -c "$CHROOT/dev/null" ] || mknod -m 666 "$CHROOT/dev/null" c 1 3
 	[ -c "$CHROOT/dev/zero" ] || mknod -m 666 "$CHROOT/dev/zero" c 1 5
 	mkdir -p "$CHROOT/tmp" && chmod 1777 "$CHROOT/tmp"
+	# root lands in /root on `tazlab enter`; give it the same welcome .profile.
+	mkdir -p "$CHROOT/root"
+	cat > "$CHROOT/root/.profile" <<PROFILE
+echo ""
+echo "Welcome to SliTaz Chroot - Env: $ARCH"
+echo ""
+PROFILE
 	if [ -n "$SUDO_USER" ]; then
 		mkdir -p "$CHROOT/home/$SUDO_USER"
 		cat > "$CHROOT/home/$SUDO_USER/.profile" <<PROFILE
@@ -385,6 +439,13 @@ cmd_setup() {
 		die "extracted chroot looks broken: no /bin/sh (chroot wiped)"
 	fi
 	echo slitaz > "$CHROOT/etc/hostname"
+	# root lands in /root on `tazlab enter`; give it the same welcome .profile.
+	mkdir -p "$CHROOT/root"
+	cat > "$CHROOT/root/.profile" <<EOF
+echo ""
+echo "Welcome to SliTaz Chroot - Env: $ARCH"
+echo ""
+EOF
 	# Create sudo user's home inside the chroot so 'cd' works out of the
 	# box, and provide a .profile with a welcome message.
 	if [ -n "$SUDO_USER" ]; then
@@ -451,7 +512,7 @@ cmd_umount() {
 cmd_enter() {
 	cmd_mount
 	unshare -u chroot "$CHROOT" /bin/sh -c \
-		'hostname slitaz; HOME=/root; export HOME; exec /bin/sh -l'
+		'hostname slitaz; HOME=/root; export HOME; cd "$HOME"; exec /bin/sh -l'
 	cmd_umount
 }
 
