@@ -21,13 +21,17 @@ success() { echo " ${C_GREEN}✓${C_NONE} $*"; }
 warn()    { echo " ${C_YELLOW}⚠${C_NONE} $*" >&2; }
 die()     { echo " ${C_RED}☠${C_NONE} $*" >&2; exit 1; }
 
-# Resolve the calling user when invoked via sudo, so state lives in their
-# home (~/.slitaz) rather than /root/.slitaz. SliTaz's busybox has no getent,
-# so fall back to parsing /etc/passwd; logname recovers the login user when
-# sudo didn't export SUDO_USER.
+# Resolve the calling user when running as root, so state lives in their home
+# (~/.slitaz) rather than /root/.slitaz. need_root() captures the invoking user
+# in TAZLAB_USER/TAZLAB_HOME before elevating — essential on SliTaz, where sudo
+# is a `su -c` wrapper that drops SUDO_USER and resets HOME to /root. Fall back
+# to SUDO_USER (real sudo) then logname, and to /etc/passwd if getent is absent.
 if [ "$(id -u)" -eq 0 ]; then
+	[ -n "$TAZLAB_USER" ] && : ${SUDO_USER:=$TAZLAB_USER}
 	: ${SUDO_USER:=$(logname 2>/dev/null)}
-	if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != root ]; then
+	if [ -n "$TAZLAB_HOME" ]; then
+		HOME="$TAZLAB_HOME"
+	elif [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != root ]; then
 		REAL_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
 		[ -n "$REAL_HOME" ] || REAL_HOME=$(awk -F: -v u="$SUDO_USER" \
 			'$1==u {print $6; exit}' /etc/passwd)
@@ -356,6 +360,12 @@ need_root() {
 	[ "$(id -u)" -eq 0 ] && return 0
 	command -v sudo >/dev/null 2>&1 \
 		|| die "this command needs root and sudo is not installed"
+	# Capture the real user/home before elevating so the root process can put
+	# state under their home. SliTaz's sudo is a `su -c` wrapper that drops
+	# SUDO_USER and resets HOME, but busybox su preserves other env vars.
+	TAZLAB_USER="${TAZLAB_USER:-$(id -un)}"
+	TAZLAB_HOME="${TAZLAB_HOME:-$HOME}"
+	export TAZLAB_USER TAZLAB_HOME
 	exec sudo "$0" "$@"
 }
 
