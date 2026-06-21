@@ -244,6 +244,7 @@ _cmd_setup_build() {
 echo ""
 echo "Welcome to SliTaz Chroot - Env: $ARCH"
 echo ""
+export SHELL=/bin/ash
 PROFILE
 	if [ -n "$SUDO_USER" ]; then
 		mkdir -p "$CHROOT/home/$SUDO_USER"
@@ -251,6 +252,7 @@ PROFILE
 echo ""
 echo "Welcome to SliTaz Chroot - Env: $ARCH"
 echo ""
+export SHELL=/bin/ash
 PROFILE
 		chown "$SUDO_USER": "$SLITAZ_HOME/$ARCH" \
 			"$SLITAZ_HOME/$ARCH/packages" "$SLITAZ_HOME/$ARCH/cache" \
@@ -445,6 +447,7 @@ cmd_setup() {
 echo ""
 echo "Welcome to SliTaz Chroot - Env: $ARCH"
 echo ""
+export SHELL=/bin/ash
 EOF
 	# Create sudo user's home inside the chroot so 'cd' works out of the
 	# box, and provide a .profile with a welcome message.
@@ -454,6 +457,7 @@ EOF
 echo ""
 echo "Welcome to SliTaz Chroot - Env: $ARCH"
 echo ""
+export SHELL=/bin/ash
 EOF
 		chown "$SUDO_USER": "$CHROOT/home/$SUDO_USER" \
 			"$CHROOT/home/$SUDO_USER/.profile" 2>/dev/null
