@@ -22,10 +22,17 @@ warn()    { echo " ${C_YELLOW}⚠${C_NONE} $*" >&2; }
 die()     { echo " ${C_RED}☠${C_NONE} $*" >&2; exit 1; }
 
 # Resolve the calling user when invoked via sudo, so state lives in their
-# home (~/.slitaz) rather than /root/.slitaz.
-if [ -n "$SUDO_USER" ] && [ "$(id -u)" -eq 0 ]; then
-	REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
-	[ -n "$REAL_HOME" ] && HOME="$REAL_HOME"
+# home (~/.slitaz) rather than /root/.slitaz. SliTaz's busybox has no getent,
+# so fall back to parsing /etc/passwd; logname recovers the login user when
+# sudo didn't export SUDO_USER.
+if [ "$(id -u)" -eq 0 ]; then
+	: ${SUDO_USER:=$(logname 2>/dev/null)}
+	if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != root ]; then
+		REAL_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+		[ -n "$REAL_HOME" ] || REAL_HOME=$(awk -F: -v u="$SUDO_USER" \
+			'$1==u {print $6; exit}' /etc/passwd)
+		[ -n "$REAL_HOME" ] && HOME="$REAL_HOME"
+	fi
 fi
 
 # Load config: /etc, then user, then cwd (last wins).
@@ -88,6 +95,10 @@ ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
 : ${QEMU_MEM:=512M}
 : ${QEMU_SMP:=2}
 : ${QEMU_ARGS:=-net nic -net user}
+
+# Use a UTS namespace so the in-chroot `hostname slitaz` doesn't rename the
+# host. SliTaz's busybox may lack the unshare applet — then we skip it.
+command -v unshare >/dev/null 2>&1 && UNSHARE="unshare -u" || UNSHARE=""
 
 CHROOT="$SLITAZ_HOME/$ARCH/chroot"
 PACKAGES="$SLITAZ_HOME/$ARCH/packages"
@@ -574,10 +585,20 @@ cmd_umount() {
 	success "Chroot unmounted."
 }
 
+# Run a shell snippet inside the chroot. With a UTS namespace we also set the
+# hostname to 'slitaz'; without unshare we drop the rename so the host keeps
+# its own hostname.
+in_chroot() {
+	if [ -n "$UNSHARE" ]; then
+		$UNSHARE chroot "$CHROOT" /bin/sh -c "hostname slitaz; $1"
+	else
+		chroot "$CHROOT" /bin/sh -c "$1"
+	fi
+}
+
 cmd_enter() {
 	cmd_mount
-	unshare -u chroot "$CHROOT" /bin/sh -c \
-		'hostname slitaz; HOME=/root; export HOME; cd "$HOME"; exec /bin/sh -l'
+	in_chroot 'HOME=/root; export HOME; cd "$HOME"; exec /bin/sh -l'
 	cmd_umount
 }
 
@@ -674,32 +695,28 @@ cmd_enter_user() {
 	grep -q "^$user:" "$CHROOT/etc/passwd" 2>/dev/null \
 		|| die "user '$user' not in chroot. Run: tazlab setup-user $ARCH $user"
 	cmd_mount
-	unshare -u chroot "$CHROOT" /bin/sh -c \
-		"hostname slitaz; exec su - $user"
+	in_chroot "exec su - $user"
 	cmd_umount
 }
 
 cmd_cook() {
 	[ -n "$1" ] || die "usage: tazlab cook <pkg>"
 	cmd_mount
-	unshare -u chroot "$CHROOT" /bin/sh -c \
-		"hostname slitaz; cook $1"
+	in_chroot "cook $1"
 	cmd_umount
 }
 
 cmd_run() {
 	[ -n "$1" ] || die "usage: tazlab run <command>"
 	cmd_mount
-	unshare -u chroot "$CHROOT" /bin/sh -c \
-		"hostname slitaz; $*"
+	in_chroot "$*"
 	cmd_umount
 }
 
 cmd_update_chroot() {
 	cmd_mount
 	msg "Updating chroot packages..."
-	unshare -u chroot "$CHROOT" /bin/sh -c \
-		"hostname slitaz; tazpkg recharge && tazpkg upgrade"
+	in_chroot "tazpkg recharge && tazpkg upgrade"
 	cmd_umount
 	success "Chroot updated."
 }
@@ -839,13 +856,18 @@ cmd_check() {
 	_check mountpoint
 	_check stat
 	_check od
-	_check unshare
-	_check getent
 	_check awk
 	_check chroot
 	_check sudo
 	_check mktemp
 	_check rsync
+
+	# unshare/getent are optional: tazlab falls back to a plain chroot and to
+	# parsing /etc/passwd when they're missing (e.g. busybox on SliTaz).
+	command -v unshare >/dev/null 2>&1 \
+		|| warn "unshare not found (optional; host hostname not isolated in chroot)"
+	command -v getent >/dev/null 2>&1 \
+		|| warn "getent not found (optional; using /etc/passwd fallback)"
 
 	# Qemu is optional.
 	command -v qemu-system-x86_64 >/dev/null 2>&1 \
