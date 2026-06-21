@@ -375,6 +375,57 @@ decomp() {
 	esac
 }
 
+# Read a little-endian unsigned integer from a file: _le <file> <offset> <bytes>.
+# Pure shell (dd | od + $(()) hex) so it works under busybox on a SliTaz host.
+_le() {
+	_hx=$(dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	_v=0
+	while [ ${#_hx} -ge 2 ]; do
+		_byte=${_hx#${_hx%??}}; _hx=${_hx%??}
+		_v=$(( _v*256 + 0x$_byte ))
+	done
+	echo "$_v"
+}
+
+# Echo "<offset-bytes> <size-bytes>" of the EFI System Partition in GPT disk
+# image $1, or return 1. Newer UEFI-only SliTaz ISOs hide boot/rootfs.gz inside
+# this FAT partition instead of the iso9660 tree.
+_efi_part() {
+	[ "$(dd if="$1" bs=1 skip=512 count=8 2>/dev/null)" = "EFI PART" ] || return 1
+	_pe=$(_le "$1" 584 8); _esz=$(_le "$1" 596 4); _num=$(_le "$1" 592 4)
+	[ "$_num" -gt 256 ] && _num=256
+	_i=0
+	while [ "$_i" -lt "$_num" ]; do
+		_b=$(( _pe*512 + _i*_esz ))
+		_guid=$(dd if="$1" bs=1 skip="$_b" count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')
+		if [ "$_guid" = "28732ac11ff8d211ba4b00a0c93ec93b" ]; then
+			_s=$(_le "$1" $((_b+32)) 8); _e=$(_le "$1" $((_b+40)) 8)
+			echo "$((_s*512)) $(((_e-_s+1)*512))"; return 0
+		fi
+		_i=$((_i+1))
+	done
+	return 1
+}
+
+# Echo the rootfs layer(s) under a mounted ISO/EFI dir $1, sorted. SliTaz uses a
+# single boot/rootfs.gz, or layered boot/rootfs[1-4].gz.
+_find_layers() {
+	if [ -f "$1/boot/rootfs.gz" ]; then
+		echo "$1/boot/rootfs.gz"
+	else
+		ls "$1"/boot/rootfs?.gz 2>/dev/null | sort
+	fi
+}
+
+# Tear down the temp ISO + EFI-partition mounts/files created during setup.
+_setup_iso_cleanup() {
+	[ -n "$efimnt" ] && mountpoint -q "$efimnt" 2>/dev/null && umount "$efimnt"
+	[ -n "$efimnt" ] && [ -d "$efimnt" ] && rmdir "$efimnt"
+	[ -n "$efiimg" ] && rm -f "$efiimg"
+	[ -n "$mnt" ] && mountpoint -q "$mnt" 2>/dev/null && umount "$mnt"
+	[ -n "$mnt" ] && [ -d "$mnt" ] && rmdir "$mnt"
+}
+
 # --- Commands ---------------------------------------------------------
 
 cmd_setup() {
@@ -414,28 +465,38 @@ cmd_setup() {
 		msg "Using cached ISO: $iso"
 	fi
 	mnt=$(mktemp -d) || die "mktemp failed"
+	efiimg=""; efimnt=""
 	mount -o loop,ro "$iso" "$mnt" || { rmdir "$mnt"; die "ISO mount failed"; }
-	# SliTaz ISO: single boot/rootfs.gz, or layered rootfs[1-4].gz.
-	if [ -f "$mnt/boot/rootfs.gz" ]; then
-		layers="$mnt/boot/rootfs.gz"
-	else
-		layers=$(ls "$mnt"/boot/rootfs?.gz 2>/dev/null | sort)
+	# Classic SliTaz ISO: boot/rootfs.gz (or layered rootfs[1-4].gz) lives in the
+	# iso9660 tree. Newer UEFI-only ISOs hide it inside the FAT EFI System
+	# Partition, invisible to this mount — carve that partition out and mount it.
+	layers=$(_find_layers "$mnt")
+	if [ -z "$layers" ]; then
+		geom=$(_efi_part "$iso") \
+			|| { _setup_iso_cleanup; die "no rootfs found in ISO"; }
+		msg "rootfs not in iso9660 tree; reading EFI System Partition..."
+		efiimg=$(mktemp) || { _setup_iso_cleanup; die "mktemp failed"; }
+		dd if="$iso" of="$efiimg" bs=512 skip=$(( ${geom% *} / 512 )) \
+			count=$(( ${geom#* } / 512 )) 2>/dev/null \
+			|| { _setup_iso_cleanup; die "EFI partition read failed"; }
+		efimnt=$(mktemp -d) || { _setup_iso_cleanup; die "mktemp failed"; }
+		mount -o loop,ro -t vfat "$efiimg" "$efimnt" \
+			|| { _setup_iso_cleanup; die "EFI partition mount failed"; }
+		layers=$(_find_layers "$efimnt")
 	fi
-	[ -n "$layers" ] || {
-		umount "$mnt"; rmdir "$mnt"; die "no rootfs found in ISO"
-	}
+	[ -n "$layers" ] || { _setup_iso_cleanup; die "no rootfs found in ISO"; }
 	msg "Extracting rootfs to: $CHROOT"
 	for l in $layers; do echo "  layer: $l ($(stat -c%s "$l") bytes)"; done
 	# On extraction failure, wipe the partial chroot so the next 'setup' run
 	# isn't blocked by the "already set up" guard.
 	for l in $layers; do
 		if ! decomp "$l" | ( cd "$CHROOT" && cpio -idmu --quiet ); then
-			umount "$mnt"; rmdir "$mnt"
+			_setup_iso_cleanup
 			rm -rf "$CHROOT"
 			die "rootfs extraction failed (chroot wiped, retry: tazlab setup $ARCH)"
 		fi
 	done
-	umount "$mnt" && rmdir "$mnt"
+	_setup_iso_cleanup
 	if [ ! -x "$CHROOT/bin/sh" ]; then
 		rm -rf "$CHROOT"
 		die "extracted chroot looks broken: no /bin/sh (chroot wiped)"
