@@ -36,7 +36,7 @@ fi
 : ${SLITAZ_HOME:=$HOME/.slitaz}
 : ${ARCH:=x86_64}
 : ${ISO_URL_i486:=http://mirror.slitaz.org/iso/rolling/slitaz-rolling.iso}
-: ${ISO_URL_x86_64:=https://people.slitaz.org/~shann/slitaz-current64-stuff/slitaz-current64-core64-grub2.iso}
+: ${ISO_URL_x86_64:=https://lab.slitaz.org/x86_64/iso/slitaz-base-x86_64-cooking.iso}
 
 validate_arch() {
 	case "$1" in
