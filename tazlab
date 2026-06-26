@@ -128,7 +128,7 @@ recalc_paths() {
 
 FLAVOR_base="slitaz-base-files busybox glibc-base gcc-lib-base gcc-lib-math \
     bash ncurses ncurses-common readline zlib linux-api-headers \
-    lzma gettext-base spk tazpkg cookutils cacerts"
+    lzlib lzma gettext-base spk tazpkg cookutils cacerts"
 FLAVOR_slitaz_ai="$FLAVOR_base \
     llama.cpp llama.cpp-tools llama3pure"
 
