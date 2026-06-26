@@ -249,6 +249,13 @@ _cmd_setup_build() {
 	[ -e "$CHROOT/lib64" ] || ln -sf lib "$CHROOT/lib64"
 	chroot "$CHROOT" /bin/busybox --install -s 2>/dev/null \
 		|| warn "busybox --install failed"
+	# slitaz-base-files ships slitaz.conf with SLITAZ_ARCH="i486". In an
+	# x86_64 chroot that leaves tazpkg looking on the i486 mirror and finding
+	# nothing — pin it to the arch of the packages we just installed.
+	if [ -f "$CHROOT/etc/slitaz/slitaz.conf" ]; then
+		sed -i "s|^SLITAZ_ARCH=.*|SLITAZ_ARCH=\"$pkg_arch\"|" \
+			"$CHROOT/etc/slitaz/slitaz.conf"
+	fi
 	echo "slitaz" > "$CHROOT/etc/hostname"
 	[ -c "$CHROOT/dev/null" ] || mknod -m 666 "$CHROOT/dev/null" c 1 3
 	[ -c "$CHROOT/dev/zero" ] || mknod -m 666 "$CHROOT/dev/zero" c 1 5
