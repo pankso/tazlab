@@ -222,7 +222,7 @@ _cmd_setup_build() {
 		warn "mounts found under $CHROOT — unmounting"
 		for m in home/slitaz/distro home/slitaz/repos home/slitaz/src \
 		          home/slitaz/log home/slitaz/cache home/slitaz/packages \
-		          home/slitaz/wok dev/pts dev sys proc; do
+		          home/slitaz/wok dev/shm dev/pts dev sys proc; do
 			mountpoint -q "$CHROOT/$m" 2>/dev/null && umount "$CHROOT/$m"
 		done
 		mount | grep -q " $CHROOT[/ ]" && die "could not unmount $CHROOT"
@@ -257,8 +257,7 @@ _cmd_setup_build() {
 			"$CHROOT/etc/slitaz/slitaz.conf"
 	fi
 	echo "slitaz" > "$CHROOT/etc/hostname"
-	[ -c "$CHROOT/dev/null" ] || mknod -m 666 "$CHROOT/dev/null" c 1 3
-	[ -c "$CHROOT/dev/zero" ] || mknod -m 666 "$CHROOT/dev/zero" c 1 5
+	_populate_dev "$CHROOT"
 	mkdir -p "$CHROOT/tmp" && chmod 1777 "$CHROOT/tmp"
 	# root lands in /root on `tazlab enter`; give it the same welcome .profile.
 	mkdir -p "$CHROOT/root"
@@ -530,6 +529,9 @@ cmd_setup() {
 		die "extracted chroot looks broken: no /bin/sh (chroot wiped)"
 	fi
 	echo slitaz > "$CHROOT/etc/hostname"
+	# Give the chroot a private /dev (static nodes + ptmx->pts/ptmx symlink) so
+	# it's complete before the first enter; cmd_mount adds the fresh devpts.
+	_populate_dev "$CHROOT"
 	# root lands in /root on `tazlab enter`; give it the same welcome .profile.
 	mkdir -p "$CHROOT/root"
 	cat > "$CHROOT/root/.profile" <<EOF
@@ -561,12 +563,39 @@ EOF
 	success "Done. Run: sudo tazlab enter $ARCH"
 }
 
+# Populate a private /dev in the chroot: static nodes + symlinks + the pts/shm
+# mountpoints. /dev/ptmx is a symlink to pts/ptmx so opening it routes to this
+# chroot's own devpts instance (mounted with newinstance in cmd_mount), giving
+# each chroot a separate /dev/pts. Idempotent.
+_populate_dev() {
+	local d="$1/dev"
+	mkdir -p "$d/pts" "$d/shm"
+	[ -c "$d/null" ]    || mknod -m 666 "$d/null"    c 1 3
+	[ -c "$d/zero" ]    || mknod -m 666 "$d/zero"    c 1 5
+	[ -c "$d/full" ]    || mknod -m 666 "$d/full"    c 1 7
+	[ -c "$d/random" ]  || mknod -m 444 "$d/random"  c 1 8
+	[ -c "$d/urandom" ] || mknod -m 444 "$d/urandom" c 1 9
+	[ -c "$d/tty" ]     || mknod -m 666 "$d/tty"     c 5 0
+	[ -c "$d/console" ] || mknod -m 600 "$d/console" c 5 1
+	# ptmx MUST be a symlink to pts/ptmx (not the c5:2 node), else opens go to
+	# the inherited/shared devpts and the per-chroot isolation is lost.
+	[ -L "$d/ptmx" ] || { rm -f "$d/ptmx"; ln -s pts/ptmx "$d/ptmx"; }
+	# -n: if the link already exists as a symlink to a dir (e.g. fd from the
+	# extracted rootfs), replace it instead of creating the link *inside* it.
+	ln -sfn /proc/self/fd   "$d/fd"
+	ln -sfn /proc/self/fd/0 "$d/stdin"
+	ln -sfn /proc/self/fd/1 "$d/stdout"
+	ln -sfn /proc/self/fd/2 "$d/stderr"
+}
+
 cmd_mount() {
 	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup $ARCH"
 	is_mounted proc    || mount -t proc  proc "$CHROOT/proc"
 	is_mounted sys     || mount -t sysfs sys  "$CHROOT/sys"
-	is_mounted dev     || mount --bind /dev     "$CHROOT/dev"
-	is_mounted dev/pts || mount --bind /dev/pts "$CHROOT/dev/pts"
+	_populate_dev "$CHROOT"
+	is_mounted dev/pts || mount -t devpts -o newinstance,ptmxmode=666,gid=5,mode=620 \
+		devpts "$CHROOT/dev/pts"
+	is_mounted dev/shm || mount -t tmpfs tmpfs "$CHROOT/dev/shm"
 	# Bind shared dirs so builds persist on the host.
 	mkdir -p "$REPOS" "$DISTRO"
 	if [ -n "$SUDO_USER" ]; then
@@ -596,7 +625,7 @@ cmd_umount() {
 	fi
 	for m in 	home/slitaz/distro home/slitaz/repos home/slitaz/src home/slitaz/log \
 		home/slitaz/cache home/slitaz/packages home/slitaz/wok \
-		dev/pts dev sys proc; do
+		dev/shm dev/pts dev sys proc; do
 		is_mounted "$m" && umount "$CHROOT/$m"
 	done
 	success "Chroot unmounted."
