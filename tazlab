@@ -5,7 +5,7 @@
 # Author: Christophe Lincoln <pankso@slitaz.org>
 #
 
-VERSION="0.2"
+VERSION="0.3"
 
 # --- UI & Colors ---
 esc="$(printf '\033')"
@@ -95,6 +95,12 @@ ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
 : ${REPOS_LIST:=cookutils slitaz-base-files slitaz-boot-scripts}
 : ${HG_BASE:=https://hg.slitaz.org}
 
+# Where cooked .tazpkg live on the host, per source arch. %ARCH% is replaced
+# with the source arch (the --pkgs= value, else the env arch). Default keeps
+# the per-env layout ~/.slitaz/<arch>/packages. On a cooker/build host (e.g.
+# marmite) set: PACKAGES_DIR="/home/slitaz/cooker/%ARCH%/cooking/packages".
+: ${PACKAGES_DIR:=$SLITAZ_HOME/%ARCH%/packages}
+
 # Qemu defaults (overridable in tazlab.conf).
 : ${QEMU_MEM:=512M}
 : ${QEMU_SMP:=2}
@@ -131,6 +137,13 @@ FLAVOR_base="slitaz-base-files busybox glibc-base gcc-lib-base gcc-lib-math \
     lzlib lzma gettext-base spk tazpkg cookutils cacerts"
 FLAVOR_slitaz_ai="$FLAVOR_base \
     llama.cpp llama.cpp-tools llama3pure"
+
+# Resolve the host packages dir for a source arch, expanding %ARCH% in
+# PACKAGES_DIR. Lets a cooker host point at e.g. cooker/<arch>/cooking/packages
+# instead of the default per-env ~/.slitaz/<arch>/packages.
+_pkg_src_dir() {
+	printf '%s\n' "${PACKAGES_DIR%/}" | sed "s|%ARCH%|$1|g"
+}
 
 _find_tazpkg() {
 	local name="$1" src="$2" f pkg_name
@@ -209,7 +222,7 @@ _install_tazpkg() {
 
 _cmd_setup_build() {
 	local pkg_arch="$1" flavor="$2"
-	local pkg_src="$SLITAZ_HOME/$pkg_arch/packages"
+	local pkg_src=$(_pkg_src_dir "$pkg_arch")
 	local pkgs missing="" name f count=0
 	case "$flavor" in
 		base)      pkgs="$FLAVOR_base" ;;
@@ -781,7 +794,7 @@ cmd_sync() {
 			&& src_arch=$(cat "$SLITAZ_HOME/$ARCH/pkgsrc")
 		: ${src_arch:=$ARCH}
 	fi
-	src="$SLITAZ_HOME/$src_arch/packages"
+	src=$(_pkg_src_dir "$src_arch")
 	dest="$PACKAGES"   # = $SLITAZ_HOME/$ARCH/packages
 	command -v rsync >/dev/null 2>&1 || die "rsync not installed on host"
 	[ -d "$src" ] || die "no packages dir: $src"

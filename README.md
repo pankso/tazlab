@@ -55,7 +55,7 @@ Two flavors are built in:
 
 | Flavor | Contents |
 | :--- | :--- |
-| `base` | slitaz-base-files, busybox, glibc, gcc-lib, bash, ncurses, readline, zlib, linux-api-headers, lzma, gettext-base, spk, tazpkg, cookutils |
+| `base` | slitaz-base-files, busybox, glibc-base, gcc-lib-base, gcc-lib-math, ncurses, ncurses-common, libtinfo, readline, zlib, linux-api-headers, lzlib, lzma, gettext-base, spk, tazpkg, cookutils, cacerts |
 | `slitaz-ai` | `base` + llama.cpp, llama.cpp-tools, llama3pure |
 
 `--pkgs=<env>` lets you source packages from a different environment (e.g. build a `slitaz-ai/` chroot using packages cooked in `x86_64/`).
