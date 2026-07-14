@@ -298,6 +298,20 @@ PROFILE
 	echo "$pkg_arch" > "$SLITAZ_HOME/$ARCH/pkgsrc"
 	[ -n "$SUDO_USER" ] && chown "$SUDO_USER": "$SLITAZ_HOME/$ARCH/pkgsrc" 2>/dev/null
 	success "$count packages installed into $CHROOT"
+
+	# Cooker chroot (carries cookiso)? Re-apply the build-host tazlito/flavors
+	# wiring so it survives this rebuild — otherwise every regen loses the
+	# tazlito.conf paths and tazlito itself. cmd_mount brings the shared repos/
+	# bind-mount (and resolv.conf) up first, so `cookiso setup` finds the shared
+	# flavors instead of cloning a stray copy; then restore the unmounted state.
+	if [ -x "$CHROOT/usr/bin/cookiso" ]; then
+		msg "Wiring build-host config (cookiso setup)..."
+		cmd_mount
+		in_chroot 'cookiso setup' \
+			|| warn "cookiso setup failed — run it manually via: tazlab enter $ARCH"
+		cmd_umount
+	fi
+
 	msg "Next: sudo tazlab setup-user $ARCH"
 	msg "Optional: sudo tazlab sync $ARCH  (mirror all '$pkg_arch' packages into the chroot)"
 }
