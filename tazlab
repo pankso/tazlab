@@ -119,6 +119,7 @@ DISTRO="$SLITAZ_HOME/$ARCH/distro"
 # Shared between architectures
 SRC="$SLITAZ_HOME/src"
 REPOS="$SLITAZ_HOME/repos"
+ISO="$SLITAZ_HOME/iso"
 
 # Re-derive per-arch paths after ARCH changes (new custom envs bypass is_env).
 recalc_paths() {
@@ -233,7 +234,7 @@ _cmd_setup_build() {
 	chroot_in_use && die "a process is running in $CHROOT — exit it first"
 	if mount | grep -q " $CHROOT[/ ]"; then
 		warn "mounts found under $CHROOT — unmounting"
-		for m in home/slitaz/distro home/slitaz/repos home/slitaz/src \
+		for m in home/slitaz/iso home/slitaz/distro home/slitaz/repos home/slitaz/src \
 		          home/slitaz/log home/slitaz/cache home/slitaz/packages \
 		          home/slitaz/wok dev/shm dev/pts dev sys proc; do
 			mountpoint -q "$CHROOT/$m" 2>/dev/null && umount "$CHROOT/$m"
@@ -624,7 +625,7 @@ cmd_mount() {
 		devpts "$CHROOT/dev/pts"
 	is_mounted dev/shm || mount -t tmpfs tmpfs "$CHROOT/dev/shm"
 	# Bind shared dirs so builds persist on the host.
-	mkdir -p "$REPOS" "$DISTRO"
+	mkdir -p "$REPOS" "$DISTRO" "$ISO"
 	if [ -n "$SUDO_USER" ]; then
 		chown "$SUDO_USER": "$REPOS" "$DISTRO" 2>/dev/null
 	fi
@@ -634,7 +635,8 @@ cmd_mount() {
 		"$CHROOT/home/slitaz/log" \
 		"$CHROOT/home/slitaz/src" \
 		"$CHROOT/home/slitaz/repos" \
-		"$CHROOT/home/slitaz/distro"
+		"$CHROOT/home/slitaz/distro" \
+		"$CHROOT/home/slitaz/iso"
 	is_mounted home/slitaz/wok      || mount --bind "$WOK"      "$CHROOT/home/slitaz/wok"
 	is_mounted home/slitaz/packages || mount --bind "$PACKAGES" "$CHROOT/home/slitaz/packages"
 	is_mounted home/slitaz/cache    || mount --bind "$CACHE"    "$CHROOT/home/slitaz/cache"
@@ -642,6 +644,7 @@ cmd_mount() {
 	is_mounted home/slitaz/src      || mount --bind "$SRC"      "$CHROOT/home/slitaz/src"
 	is_mounted home/slitaz/repos  || mount --bind "$REPOS"  "$CHROOT/home/slitaz/repos"
 	is_mounted home/slitaz/distro || mount --bind "$DISTRO" "$CHROOT/home/slitaz/distro"
+	is_mounted home/slitaz/iso    || mount --bind "$ISO"    "$CHROOT/home/slitaz/iso"
 	cp -L /etc/resolv.conf "$CHROOT/etc/resolv.conf"
 }
 
@@ -650,7 +653,7 @@ cmd_umount() {
 		msg "Chroot still in use, keeping mounts."
 		return 0
 	fi
-	for m in 	home/slitaz/distro home/slitaz/repos home/slitaz/src home/slitaz/log \
+	for m in 	home/slitaz/iso home/slitaz/distro home/slitaz/repos home/slitaz/src home/slitaz/log \
 		home/slitaz/cache home/slitaz/packages home/slitaz/wok \
 		dev/shm dev/pts dev sys proc; do
 		is_mounted "$m" && umount "$CHROOT/$m"
