@@ -135,7 +135,7 @@ recalc_paths() {
 
 FLAVOR_base="slitaz-base-files busybox glibc-base gcc-lib-base gcc-lib-math \
     ncurses ncurses-common libtinfo readline zlib linux-api-headers \
-    lzlib lzma gettext-base spk tazpkg cookutils cacerts"
+    lzlib lzma liblzma xz gettext-base spk tazpkg cookutils cacerts"
 FLAVOR_slitaz_ai="$FLAVOR_base \
     llama.cpp llama.cpp-tools llama3pure"
 
@@ -269,6 +269,23 @@ _cmd_setup_build() {
 	if [ -f "$CHROOT/etc/slitaz/slitaz.conf" ]; then
 		sed -i "s|^SLITAZ_ARCH=.*|SLITAZ_ARCH=\"$pkg_arch\"|" \
 			"$CHROOT/etc/slitaz/slitaz.conf"
+	fi
+	# cook builds each package inside an aufs/overlay jail whose lowerdir is the
+	# chroot's '/'. Our wok and shared build dirs are bind mounts, not part of
+	# that '/' filesystem — neither overlayfs nor the jail's non-recursive
+	# `mount -o bind /home` carries them in, so the jailed cook sees an EMPTY wok
+	# and dies with 'Unable to find package "<pkg>" in the wok' even though the
+	# receipt is right there. List our binds in AUFS_MOUNTS so the jail re-binds
+	# each one. Thanks to Claudinei Pereira (@claudineiaga) for hitting and
+	# tracking this down.
+	if [ -f "$CHROOT/etc/slitaz/cook.conf" ] &&
+	   ! grep -q '^AUFS_MOUNTS=.*home/slitaz/wok' "$CHROOT/etc/slitaz/cook.conf"; then
+		cat >> "$CHROOT/etc/slitaz/cook.conf" <<'COOKCONF'
+
+# tazlab: the wok and shared build dirs are bind mounts, not part of the '/'
+# overlay lowerdir, so list them here or cook's aufs jail sees an empty wok.
+AUFS_MOUNTS="$AUFS_MOUNTS /home/slitaz/wok /home/slitaz/cache /home/slitaz/log /home/slitaz/repos /home/slitaz/distro"
+COOKCONF
 	fi
 	echo "slitaz" > "$CHROOT/etc/hostname"
 	_populate_dev "$CHROOT"
