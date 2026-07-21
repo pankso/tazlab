@@ -5,7 +5,7 @@
 # Author: Christophe Lincoln <pankso@slitaz.org>
 #
 
-VERSION="0.3"
+VERSION="0.4"
 
 # --- UI & Colors ---
 esc="$(printf '\033')"
@@ -100,6 +100,12 @@ ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
 # the per-env layout ~/.slitaz/<arch>/packages. On a cooker/build host (e.g.
 # marmite) set: PACKAGES_DIR="/home/slitaz/cooker/%ARCH%/cooking/packages".
 : ${PACKAGES_DIR:=$SLITAZ_HOME/%ARCH%/packages}
+
+# Network mirror set as the chroot's tazpkg mirror on `setup --build`, so
+# `tazpkg recharge && get-install` work out of the box without copying packages
+# locally. %ARCH% is replaced with the packages arch. `tazlab sync` overrides
+# it with the local dir; devs can add a local extra mirror (tazpkg add-undigest).
+: ${COOKING_MIRROR:=http://mirror.slitaz.org/%ARCH%/cooking/packages/}
 
 # Qemu defaults (overridable in tazlab.conf).
 : ${QEMU_MEM:=512M}
@@ -270,6 +276,13 @@ _cmd_setup_build() {
 		sed -i "s|^SLITAZ_ARCH=.*|SLITAZ_ARCH=\"$pkg_arch\"|" \
 			"$CHROOT/etc/slitaz/slitaz.conf"
 	fi
+	# Point tazpkg at the network cooking mirror for this arch, so recharge/
+	# get-install work without a local copy. `tazlab sync` overrides this with
+	# the bind-mounted local dir when an offline mirror is wanted instead.
+	mkdir -p "$CHROOT/var/lib/tazpkg"
+	printf '%s\n' "${COOKING_MIRROR%/}/" | sed "s|%ARCH%|$pkg_arch|g" \
+		> "$CHROOT/var/lib/tazpkg/mirror"
+	rm -f "$CHROOT/var/lib/tazpkg/IDs" "$CHROOT/var/lib/tazpkg/ID"
 	# cook builds each package inside an aufs/overlay jail whose lowerdir is the
 	# chroot's '/'. Our wok and shared build dirs are bind mounts, not part of
 	# that '/' filesystem — neither overlayfs nor the jail's non-recursive
@@ -935,6 +948,11 @@ cmd_check() {
 	missing=""
 	_check() {
 		command -v "$1" >/dev/null 2>&1 && return 0
+		# chroot/mount live in sbin, often off a normal user's PATH; tazlab
+		# runs them as root (sudo) where sbin is present, so accept them there.
+		for d in /usr/sbin /sbin /usr/bin /bin; do
+			[ -x "$d/$1" ] && return 0
+		done
 		missing="$missing $1"
 		err=1
 	}
@@ -995,6 +1013,8 @@ cmd_config() {
 	echo "BUILDER     = $BUILDER"
 	echo "WOK         = $WOK"
 	echo "PACKAGES    = $PACKAGES"
+	echo "PACKAGES_DIR= $PACKAGES_DIR"
+	echo "COOKING_MIRROR = $COOKING_MIRROR"
 	echo "CACHE       = $CACHE"
 	echo "LOG         = $LOG"
 	echo "SRC         = $SRC"
