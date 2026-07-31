@@ -283,23 +283,12 @@ _cmd_setup_build() {
 	printf '%s\n' "${COOKING_MIRROR%/}/" | sed "s|%ARCH%|$pkg_arch|g" \
 		> "$CHROOT/var/lib/tazpkg/mirror"
 	rm -f "$CHROOT/var/lib/tazpkg/IDs" "$CHROOT/var/lib/tazpkg/ID"
-	# cook builds each package inside an aufs/overlay jail whose lowerdir is the
-	# chroot's '/'. Our wok and shared build dirs are bind mounts, not part of
-	# that '/' filesystem — neither overlayfs nor the jail's non-recursive
-	# `mount -o bind /home` carries them in, so the jailed cook sees an EMPTY wok
-	# and dies with 'Unable to find package "<pkg>" in the wok' even though the
-	# receipt is right there. List our binds in AUFS_MOUNTS so the jail re-binds
-	# each one. Thanks to Claudinei Pereira (@claudineiaga) for hitting and
+	# The AUFS_MOUNTS snippet cook needs to see the bind-mounted wok from its
+	# build jail. Also re-applied on every mount (see _cook_conf_binds): a
+	# cookutils upgrade inside the chroot rewrites cook.conf and would drop
+	# it. Thanks to Claudinei Pereira (@claudineiaga) for hitting and
 	# tracking this down.
-	if [ -f "$CHROOT/etc/slitaz/cook.conf" ] &&
-	   ! grep -q '^AUFS_MOUNTS=.*home/slitaz/wok' "$CHROOT/etc/slitaz/cook.conf"; then
-		cat >> "$CHROOT/etc/slitaz/cook.conf" <<'COOKCONF'
-
-# tazlab: the wok and shared build dirs are bind mounts, not part of the '/'
-# overlay lowerdir, so list them here or cook's aufs jail sees an empty wok.
-AUFS_MOUNTS="$AUFS_MOUNTS /home/slitaz/wok /home/slitaz/cache /home/slitaz/log /home/slitaz/repos /home/slitaz/distro"
-COOKCONF
-	fi
+	_cook_conf_binds
 	echo "slitaz" > "$CHROOT/etc/hostname"
 	_populate_dev "$CHROOT"
 	mkdir -p "$CHROOT/tmp" && chmod 1777 "$CHROOT/tmp"
@@ -646,8 +635,55 @@ _populate_dev() {
 	ln -sfn /proc/self/fd/2 "$d/stderr"
 }
 
+# The overlay build root: chroot.base stays pristine and mirrors the package
+# set of the SliTaz build host - that alignment is what makes a local build
+# reproducible there. Every write cook does (installing build-deps and above
+# all removing them) lands in chroot.diff, one `rm -rf` away from a virgin
+# env. When the layout is present, mount it before anything else; without it
+# tazlab keeps its historic plain-chroot behavior.
+_mount_overlay() {
+	base="$SLITAZ_HOME/$ARCH/chroot.base"
+	[ -d "$base/bin" ] || return 0
+	grep -q "^overlay $CHROOT overlay" /proc/mounts && return 0
+	modprobe overlay 2>/dev/null
+	grep -qw overlay /proc/filesystems || die \
+		"$base exists but this kernel has no overlayfs - enable it first"
+	mkdir -p "$SLITAZ_HOME/$ARCH/chroot.diff" \
+		"$SLITAZ_HOME/$ARCH/chroot.work" "$CHROOT"
+	mount -t overlay overlay -o \
+		"lowerdir=$base,upperdir=$SLITAZ_HOME/$ARCH/chroot.diff,workdir=$SLITAZ_HOME/$ARCH/chroot.work" \
+		"$CHROOT" || die "overlay mount failed on $CHROOT"
+}
+
+# cook builds each package inside an aufs/overlay jail whose lowerdir is the
+# chroot's '/'. Our wok and shared build dirs are bind mounts, not part of
+# that '/' filesystem, so the jailed cook sees an EMPTY wok unless they are
+# listed in AUFS_MOUNTS. cook.conf belongs to the cookutils package: any
+# install/upgrade of cookutils inside the chroot rewrites it and silently
+# drops our snippet - so re-apply it on every mount, not only at setup time.
+_cook_conf_binds() {
+	[ -f "$CHROOT/etc/slitaz/cook.conf" ] || return 0
+	grep -q '^AUFS_MOUNTS=.*home/slitaz/wok' "$CHROOT/etc/slitaz/cook.conf" &&
+		return 0
+	cat >> "$CHROOT/etc/slitaz/cook.conf" <<'COOKCONF'
+
+# tazlab: the wok and shared build dirs are bind mounts, not part of the '/'
+# overlay lowerdir, so list them here or cook's aufs jail sees an empty wok.
+AUFS_MOUNTS="$AUFS_MOUNTS /home/slitaz/wok /home/slitaz/cache /home/slitaz/log /home/slitaz/repos /home/slitaz/distro"
+COOKCONF
+}
+
 cmd_mount() {
+	_mount_overlay
 	[ -d "$CHROOT/bin" ] || die "chroot not set up. Run: tazlab setup $ARCH"
+	# Without overlayfs cook falls back to building straight in the chroot:
+	# leftovers accumulate and end up masking missing build-deps, and the env
+	# no longer matches the pristine chroot of the SliTaz build host.
+	grep -qw overlay /proc/filesystems || {
+		modprobe overlay 2>/dev/null
+		grep -qw overlay /proc/filesystems || warn \
+			"no overlayfs on this kernel: builds will pollute the chroot and may hide missing build-deps"
+	}
 	is_mounted proc    || mount -t proc  proc "$CHROOT/proc"
 	is_mounted sys     || mount -t sysfs sys  "$CHROOT/sys"
 	_populate_dev "$CHROOT"
@@ -676,6 +712,7 @@ cmd_mount() {
 	is_mounted home/slitaz/distro || mount --bind "$DISTRO" "$CHROOT/home/slitaz/distro"
 	is_mounted home/slitaz/iso    || mount --bind "$ISO"    "$CHROOT/home/slitaz/iso"
 	cp -L /etc/resolv.conf "$CHROOT/etc/resolv.conf"
+	_cook_conf_binds
 }
 
 cmd_umount() {
@@ -688,6 +725,10 @@ cmd_umount() {
 		dev/shm dev/pts dev sys proc; do
 		is_mounted "$m" && umount "$CHROOT/$m"
 	done
+	# Drop the overlay build root too, if one is mounted. A busy overlay is
+	# left in place; the next cmd_mount detects and reuses it.
+	grep -q "^overlay $CHROOT overlay" /proc/mounts &&
+		umount "$CHROOT" 2>/dev/null
 	success "Chroot unmounted."
 }
 
