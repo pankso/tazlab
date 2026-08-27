@@ -6,7 +6,7 @@ services:
     privileged: true
 
     volumes:
-      - ./data:/root/.slitaz
+      - ./slitaz:/root/.slitaz
 
     environment:
       SLITAZ_HOME: /root/.slitaz
