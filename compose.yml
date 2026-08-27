@@ -1,0 +1,16 @@
+services:
+  tazlab:
+    build:
+      context: .
+    container_name: tazlab
+    privileged: true
+
+    volumes:
+      - ./data:/root/.slitaz
+
+    environment:
+      SLITAZ_HOME: /root/.slitaz
+      ARCH: x86_64
+
+    stdin_open: true
+    tty: true
