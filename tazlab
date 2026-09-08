@@ -283,7 +283,7 @@ _cmd_setup_build() {
 	printf '%s\n' "${COOKING_MIRROR%/}/" | sed "s|%ARCH%|$pkg_arch|g" \
 		> "$CHROOT/var/lib/tazpkg/mirror"
 	rm -f "$CHROOT/var/lib/tazpkg/IDs" "$CHROOT/var/lib/tazpkg/ID"
-	# The AUFS_MOUNTS snippet cook needs to see the bind-mounted wok from its
+	# The JAIL_MOUNTS snippet cook needs to see the bind-mounted wok from its
 	# build jail. Also re-applied on every mount (see _cook_conf_binds): a
 	# cookutils upgrade inside the chroot rewrites cook.conf and would drop
 	# it. Thanks to Claudinei Pereira (@claudineiaga) for hitting and
@@ -655,21 +655,24 @@ _mount_overlay() {
 		"$CHROOT" || die "overlay mount failed on $CHROOT"
 }
 
-# cook builds each package inside an aufs/overlay jail whose lowerdir is the
+# cook builds each package inside an overlayfs jail whose lowerdir is the
 # chroot's '/'. Our wok and shared build dirs are bind mounts, not part of
 # that '/' filesystem, so the jailed cook sees an EMPTY wok unless they are
-# listed in AUFS_MOUNTS. cook.conf belongs to the cookutils package: any
+# listed in JAIL_MOUNTS (AUFS_MOUNTS before cookutils 4.13: we use whichever
+# name the file defines). cook.conf belongs to the cookutils package: any
 # install/upgrade of cookutils inside the chroot rewrites it and silently
 # drops our snippet - so re-apply it on every mount, not only at setup time.
 _cook_conf_binds() {
-	[ -f "$CHROOT/etc/slitaz/cook.conf" ] || return 0
-	grep -q '^AUFS_MOUNTS=.*home/slitaz/wok' "$CHROOT/etc/slitaz/cook.conf" &&
-		return 0
-	cat >> "$CHROOT/etc/slitaz/cook.conf" <<'COOKCONF'
+	conf="$CHROOT/etc/slitaz/cook.conf"
+	[ -f "$conf" ] || return 0
+	grep -Eq '^(JAIL|AUFS)_MOUNTS=.*home/slitaz/wok' "$conf" && return 0
+	var=JAIL_MOUNTS
+	grep -q '^JAIL_MOUNTS=' "$conf" || var=AUFS_MOUNTS
+	cat >> "$conf" <<COOKCONF
 
 # tazlab: the wok and shared build dirs are bind mounts, not part of the '/'
-# overlay lowerdir, so list them here or cook's aufs jail sees an empty wok.
-AUFS_MOUNTS="$AUFS_MOUNTS /home/slitaz/wok /home/slitaz/cache /home/slitaz/log /home/slitaz/repos /home/slitaz/distro"
+# overlay lowerdir, so list them here or cook's jail sees an empty wok.
+$var="\$$var /home/slitaz/wok /home/slitaz/cache /home/slitaz/log /home/slitaz/repos /home/slitaz/distro"
 COOKCONF
 }
 
