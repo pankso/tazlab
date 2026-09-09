@@ -294,20 +294,10 @@ _cmd_setup_build() {
 	mkdir -p "$CHROOT/tmp" && chmod 1777 "$CHROOT/tmp"
 	# root lands in /root on `tazlab enter`; give it the same welcome .profile.
 	mkdir -p "$CHROOT/root"
-	cat > "$CHROOT/root/.profile" <<PROFILE
-echo ""
-echo "Welcome to SliTaz Chroot - Env: $ARCH"
-echo ""
-export SHELL=/bin/ash
-PROFILE
+	_write_profile "$CHROOT/root/.profile"
 	if [ -n "$SUDO_USER" ]; then
 		mkdir -p "$CHROOT/home/$SUDO_USER"
-		cat > "$CHROOT/home/$SUDO_USER/.profile" <<PROFILE
-echo ""
-echo "Welcome to SliTaz Chroot - Env: $ARCH"
-echo ""
-export SHELL=/bin/ash
-PROFILE
+		_write_profile "$CHROOT/home/$SUDO_USER/.profile"
 		chown "$SUDO_USER": "$SLITAZ_HOME/$ARCH" \
 			"$SLITAZ_HOME/$ARCH/packages" "$SLITAZ_HOME/$ARCH/cache" \
 			"$SLITAZ_HOME/$ARCH/log" "$CHROOT/home/$SUDO_USER" \
@@ -581,22 +571,12 @@ cmd_setup() {
 	_populate_dev "$CHROOT"
 	# root lands in /root on `tazlab enter`; give it the same welcome .profile.
 	mkdir -p "$CHROOT/root"
-	cat > "$CHROOT/root/.profile" <<EOF
-echo ""
-echo "Welcome to SliTaz Chroot - Env: $ARCH"
-echo ""
-export SHELL=/bin/ash
-EOF
+	_write_profile "$CHROOT/root/.profile"
 	# Create sudo user's home inside the chroot so 'cd' works out of the
 	# box, and provide a .profile with a welcome message.
 	if [ -n "$SUDO_USER" ]; then
 		mkdir -p "$CHROOT/home/$SUDO_USER"
-		cat > "$CHROOT/home/$SUDO_USER/.profile" <<EOF
-echo ""
-echo "Welcome to SliTaz Chroot - Env: $ARCH"
-echo ""
-export SHELL=/bin/ash
-EOF
+		_write_profile "$CHROOT/home/$SUDO_USER/.profile"
 		chown "$SUDO_USER": "$CHROOT/home/$SUDO_USER" \
 			"$CHROOT/home/$SUDO_USER/.profile" 2>/dev/null
 	fi
@@ -653,6 +633,19 @@ _mount_overlay() {
 	mount -t overlay overlay -o \
 		"lowerdir=$base,upperdir=$SLITAZ_HOME/$ARCH/chroot.diff,workdir=$SLITAZ_HOME/$ARCH/chroot.work" \
 		"$CHROOT" || die "overlay mount failed on $CHROOT"
+}
+
+# Login profile for the chroot: welcome banner and a prompt that names the
+# env, so a shell in i486 can't be mistaken for one in x86_64 (an rm -rf in
+# the wrong chroot taught us that). Same file for root and the build user.
+_write_profile() {
+	cat > "$1" <<PROFILE
+echo ""
+echo "Welcome to SliTaz Chroot - Env: $ARCH"
+echo ""
+export SHELL=/bin/ash
+export PS1='\[\e[1;31m\]($ARCH) \u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]# '
+PROFILE
 }
 
 # cook builds each package inside an overlayfs jail whose lowerdir is the
@@ -748,6 +741,8 @@ in_chroot() {
 
 cmd_enter() {
 	cmd_mount
+	# Chroots set up before the prompt was added: give them the profile now.
+	[ -f "$CHROOT/root/.profile" ] || _write_profile "$CHROOT/root/.profile"
 	in_chroot 'HOME=/root; export HOME; cd "$HOME"; exec /bin/sh -l'
 	cmd_umount
 }
