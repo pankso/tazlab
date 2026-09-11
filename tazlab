@@ -23,7 +23,7 @@ die()     { echo " ${C_RED}☠${C_NONE} $*" >&2; exit 1; }
 
 # Resolve the calling user when running as root, so state lives in their home
 # (~/.slitaz) rather than /root/.slitaz. need_root() captures the invoking user
-# in TAZLAB_USER/TAZLAB_HOME before elevating — essential on SliTaz, where sudo
+# in TAZLAB_USER/TAZLAB_HOME before elevating - essential on SliTaz, where sudo
 # is a `su -c` wrapper that drops SUDO_USER and resets HOME to /root. Fall back
 # to SUDO_USER (real sudo) then logname, and to /etc/passwd if getent is absent.
 if [ "$(id -u)" -eq 0 ]; then
@@ -113,7 +113,7 @@ ISO_URL=$(eval echo "\$ISO_URL_${_arch_var}")
 : ${QEMU_ARGS:=-net nic -net user}
 
 # Use a UTS namespace so the in-chroot `hostname slitaz` doesn't rename the
-# host. SliTaz's busybox may lack the unshare applet — then we skip it.
+# host. SliTaz's busybox may lack the unshare applet - then we skip it.
 command -v unshare >/dev/null 2>&1 && UNSHARE="unshare -u" || UNSHARE=""
 
 CHROOT="$SLITAZ_HOME/$ARCH/chroot"
@@ -237,9 +237,9 @@ _cmd_setup_build() {
 		*) die "unknown flavor: $flavor (base, slitaz-ai)" ;;
 	esac
 	[ -d "$pkg_src" ] || die "packages dir not found: $pkg_src"
-	chroot_in_use && die "a process is running in $CHROOT — exit it first"
+	chroot_in_use && die "a process is running in $CHROOT - exit it first"
 	if mount | grep -q " $CHROOT[/ ]"; then
-		warn "mounts found under $CHROOT — unmounting"
+		warn "mounts found under $CHROOT - unmounting"
 		for m in home/slitaz/iso home/slitaz/distro home/slitaz/repos home/slitaz/src \
 		          home/slitaz/log home/slitaz/cache home/slitaz/packages \
 		          home/slitaz/wok dev/shm dev/pts dev sys proc; do
@@ -271,7 +271,7 @@ _cmd_setup_build() {
 		|| warn "busybox --install failed"
 	# slitaz-base-files ships slitaz.conf with SLITAZ_ARCH="i486". In an
 	# x86_64 chroot that leaves tazpkg looking on the i486 mirror and finding
-	# nothing — pin it to the arch of the packages we just installed.
+	# nothing - pin it to the arch of the packages we just installed.
 	if [ -f "$CHROOT/etc/slitaz/slitaz.conf" ]; then
 		sed -i "s|^SLITAZ_ARCH=.*|SLITAZ_ARCH=\"$pkg_arch\"|" \
 			"$CHROOT/etc/slitaz/slitaz.conf"
@@ -310,7 +310,7 @@ _cmd_setup_build() {
 	success "$count packages installed into $CHROOT"
 
 	# Cooker chroot (carries cookiso)? Re-apply the build-host tazlito/flavors
-	# wiring so it survives this rebuild — otherwise every regen loses the
+	# wiring so it survives this rebuild - otherwise every regen loses the
 	# tazlito.conf paths and tazlito itself. cmd_mount brings the shared repos/
 	# bind-mount (and resolv.conf) up first, so `cookiso setup` finds the shared
 	# flavors instead of cloning a stray copy; then restore the unmounted state.
@@ -318,7 +318,7 @@ _cmd_setup_build() {
 		msg "Wiring build-host config (cookiso setup)..."
 		cmd_mount
 		in_chroot 'cookiso setup' \
-			|| warn "cookiso setup failed — run it manually via: tazlab enter $ARCH"
+			|| warn "cookiso setup failed - run it manually via: tazlab enter $ARCH"
 		cmd_umount
 	fi
 
@@ -533,7 +533,7 @@ cmd_setup() {
 	mount -o loop,ro "$iso" "$mnt" || { rmdir "$mnt"; die "ISO mount failed"; }
 	# Classic SliTaz ISO: boot/rootfs.gz (or layered rootfs[1-4].gz) lives in the
 	# iso9660 tree. Newer UEFI-only ISOs hide it inside the FAT EFI System
-	# Partition, invisible to this mount — carve that partition out and mount it.
+	# Partition, invisible to this mount - carve that partition out and mount it.
 	layers=$(_find_layers "$mnt")
 	if [ -z "$layers" ]; then
 		geom=$(_efi_part "$iso") \
@@ -886,7 +886,7 @@ cmd_update_chroot() {
 
 # Host-side mirror: rsync one env's packages dir into another's, so the
 # target env's chroot (which bind-mounts $PACKAGES at /home/slitaz/packages)
-# has the whole set available. Pure host operation — no unmount needed, since
+# has the whole set available. Pure host operation - no unmount needed, since
 # we write the host dir, not the chroot rootfs. Then point tazpkg at it so
 # `tazpkg recharge && tazpkg get-install <pkg>` works offline.
 # Not run by setup unless --sync is passed; setup suggests it instead.
@@ -909,7 +909,7 @@ cmd_sync() {
 			|| warn "missing index: $f (regenerate with: cook pkgdb)"
 	done
 	if [ "$src" = "$dest" ]; then
-		# Same env: packages already in $PACKAGES, nothing to copy — just
+		# Same env: packages already in $PACKAGES, nothing to copy - just
 		# (re)point tazpkg at them below.
 		msg "$n packages already in $ARCH; configuring mirror only"
 	else
@@ -937,7 +937,7 @@ cmd_clean() {
 }
 
 cmd_nuke() {
-	# Refuse if anything still references the chroot — rm -rf can otherwise
+	# Refuse if anything still references the chroot - rm -rf can otherwise
 	# follow bind-mounts and wipe shared host dirs (wok, repos, src...).
 	if chroot_in_use; then
 		die "chroot in use by another session: $CHROOT (exit it first)"

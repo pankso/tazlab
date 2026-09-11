@@ -61,13 +61,13 @@ Two flavors are built in:
 `--pkgs=<env>` lets you source packages from a different environment (e.g. build a `slitaz-ai/` chroot using packages cooked in `x86_64/`).
 
 ### 3c. Mirror all packages into an env (`sync`)
-A chroot built with `--build` only contains the flavor's packages. To make the **whole** package set of another arch installable from inside it (offline), `sync` rsyncs one env's `packages/` dir into another's on the host. Since `<env>/packages/` is bind-mounted at `/home/slitaz/packages` in the chroot, the packages appear inside it live — **no unmount needed**:
+A chroot built with `--build` only contains the flavor's packages. To make the **whole** package set of another arch installable from inside it (offline), `sync` rsyncs one env's `packages/` dir into another's on the host. Since `<env>/packages/` is bind-mounted at `/home/slitaz/packages` in the chroot, the packages appear inside it live - **no unmount needed**:
 ```bash
 sudo tazlab sync slitaz-ai x86_64        # rsync x86_64/packages -> slitaz-ai/packages
 sudo tazlab sync slitaz-ai               # same (src defaults to setup --build's arch)
 sudo tazlab setup slitaz-ai --build --pkgs=x86_64 --sync slitaz-ai  # build + sync
 ```
-`sync` is a pure host operation (it writes `~/.slitaz/<env>/packages/`, not the chroot rootfs) and also points the env's tazpkg at `/home/slitaz/packages/`, invalidating its freshness marker. It is never run automatically — `setup --build` only suggests it. Then, inside the chroot:
+`sync` is a pure host operation (it writes `~/.slitaz/<env>/packages/`, not the chroot rootfs) and also points the env's tazpkg at `/home/slitaz/packages/`, invalidating its freshness marker. It is never run automatically - `setup --build` only suggests it. Then, inside the chroot:
 ```bash
 tazpkg recharge && tazpkg get-install nano
 ```
@@ -131,42 +131,42 @@ TazLab is split into logical command groups. Run `tazlab help` for a quick overv
 ### 📦 Chroot Management
 All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a custom name). If omitted, the default environment from your config is used.
 
-- `setup [env] [--build [--pkgs=env] [flavor]]` — Download SliTaz ISO and extract rootfs to chroot. With `--build`, rebuild from local packages instead (no ISO needed). See flavors below.
-- `setup-user [env] [u]` — Create an unprivileged user in the chroot.
-- `enter [env]` — Mount and enter the chroot as `root`.
-- `enter-user [env] [u]` — Mount and enter as an unprivileged user.
-- `umount [env]` — Unmount the chroot (skips if another session is active).
-- `cook [env] <pkg>` — Cook a package inside the chroot.
-- `run [env] <cmd>` — Run an arbitrary command inside the chroot.
-- `update-chroot [env]` — Update all packages inside the chroot (`tazpkg upgrade`).
-- `nuke [env]` — Wipe an environment (chroot, packages, cache, distro, logs). Wok kept.
+- `setup [env] [--build [--pkgs=env] [flavor]]` - Download SliTaz ISO and extract rootfs to chroot. With `--build`, rebuild from local packages instead (no ISO needed). See flavors below.
+- `setup-user [env] [u]` - Create an unprivileged user in the chroot.
+- `enter [env]` - Mount and enter the chroot as `root`.
+- `enter-user [env] [u]` - Mount and enter as an unprivileged user.
+- `umount [env]` - Unmount the chroot (skips if another session is active).
+- `cook [env] <pkg>` - Cook a package inside the chroot.
+- `run [env] <cmd>` - Run an arbitrary command inside the chroot.
+- `update-chroot [env]` - Update all packages inside the chroot (`tazpkg upgrade`).
+- `nuke [env]` - Wipe an environment (chroot, packages, cache, distro, logs). Wok kept.
 
 ### 🌐 Repositories
-- `clone [env]` — Clone the wok (per-environment) and extra repos into `~/.slitaz/`.
-- `pull [env]` — Run `hg pull -u` on cloned repositories. Without `env`, pulls every per-environment wok plus shared repos; with `env`, only that environment's wok.
-- `repos` — Show the status of each cloned repository.
-- `add-repo <url>` — Add an extra HG repo to the tracking list.
+- `clone [env]` - Clone the wok (per-environment) and extra repos into `~/.slitaz/`.
+- `pull [env]` - Run `hg pull -u` on cloned repositories. Without `env`, pulls every per-environment wok plus shared repos; with `env`, only that environment's wok.
+- `repos` - Show the status of each cloned repository.
+- `add-repo <url>` - Add an extra HG repo to the tracking list.
 
 ### 🖥️ Virtualization
-- `qemu [env] [iso]` — Run a SliTaz ISO in QEMU (env selects the right ISO and QEMU binary).
+- `qemu [env] [iso]` - Run a SliTaz ISO in QEMU (env selects the right ISO and QEMU binary).
 
 ### 🔍 Inspection
-- `log [env] <pkg>` — Show the build log (runs `tail -f` if currently building).
-- `list [env] [filter]` — List package recipes available in the wok.
-- `search [env] <pat>` — Search for a pattern across all receipts.
-- `info [env] <pkg>` — Show detailed package receipt metadata.
-- `edit [env] <pkg>` — Open a package receipt in `$EDITOR`.
-- `deps [env] <pkg>` — Show build and runtime dependencies of a package.
+- `log [env] <pkg>` - Show the build log (runs `tail -f` if currently building).
+- `list [env] [filter]` - List package recipes available in the wok.
+- `search [env] <pat>` - Search for a pattern across all receipts.
+- `info [env] <pkg>` - Show detailed package receipt metadata.
+- `edit [env] <pkg>` - Open a package receipt in `$EDITOR`.
+- `deps [env] <pkg>` - Show build and runtime dependencies of a package.
 
 ### 🍱 Flavors
-- `flavors` — List built-in flavors and their package contents (used with `setup --build`).
+- `flavors` - List built-in flavors and their package contents (used with `setup --build`).
 
 ### 🧹 Maintenance
-- `check` — Verify all host dependencies are installed.
-- `config` — Show effective configuration (all variables resolved).
-- `init` — Interactive first-time setup wizard.
-- `status` — Show status of all environments (chroot, wok, packages, cache) and shared dirs.
-- `clean [env]` — Clean the build cache and logs for an environment.
+- `check` - Verify all host dependencies are installed.
+- `config` - Show effective configuration (all variables resolved).
+- `init` - Interactive first-time setup wizard.
+- `status` - Show status of all environments (chroot, wok, packages, cache) and shared dirs.
+- `clean [env]` - Clean the build cache and logs for an environment.
 
 ---
 
@@ -179,5 +179,5 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 
 ## 🙏 Credits
 
-- Christophe Lincoln (pankso) — author.
-- Eric Joseph-Alexandre (Erjo) — Docker support (`Dockerfile`, `compose.yml`).
+- Christophe Lincoln (pankso) - author.
+- Eric Joseph-Alexandre (Erjo) - Docker support (`Dockerfile`, `compose.yml`).
