@@ -93,6 +93,15 @@ sudo tazlab cook mylab busybox     # Cook in a custom environment
 sudo tazlab qemu i486              # Test your 32-bit ISO in QEMU
 ```
 
+### 6. Run in Docker (optional)
+No need to install anything on the host: a `Dockerfile` and a `compose.yml` (contributed by Erjo) build a small Alpine image with tazlab inside. The container must run privileged for the chroot mounts (proc, devpts, overlayfs):
+```bash
+docker compose run --rm tazlab setup i486     # ISO download + chroot in ./data/i486
+docker compose run --rm tazlab enter i486     # interactive chroot
+docker compose run --rm tazlab run i486 'tazpkg -gi nano'
+```
+Everything lives in `./data` next to `compose.yml`, mounted as `/root/.slitaz` in the container. Keep it on a regular filesystem: a `nodev` mount (e.g. a tmpfs `/tmp`) breaks the device nodes of the chroot. If the very first ISO mount fails with "failed to set up loop device", run `sudo modprobe loop` on the host once and retry.
+
 ---
 
 ## 📁 Directory Layout
@@ -165,3 +174,10 @@ All chroot commands accept an optional `[env]` argument (`i486`, `x86_64`, or a 
 
 > [!WARNING]
 > A chroot is **not** a strict security boundary. Do not run untrusted package recipes on your host machine.
+
+---
+
+## 🙏 Credits
+
+- Christophe Lincoln (pankso) — author.
+- Eric Joseph-Alexandre (Erjo) — Docker support (`Dockerfile`, `compose.yml`).
