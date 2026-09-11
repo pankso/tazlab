@@ -5,7 +5,7 @@
 # Author: Christophe Lincoln <pankso@slitaz.org>
 #
 
-VERSION="0.5"
+VERSION="0.5.1"
 
 # --- UI & Colors ---
 esc="$(printf '\033')"
