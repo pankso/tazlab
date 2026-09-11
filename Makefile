@@ -9,7 +9,7 @@ all:
 
 install:
 	install -Dm755 tazlab      $(DESTDIR)$(PREFIX)/bin/tazlab
-	install -Dm755 tazlab      $(DESTDIR)$(PREFIX)/bin/tazlab-build
+	install -Dm755 tazlab-build $(DESTDIR)$(PREFIX)/bin/tazlab-build
 	install -Dm644 tazlab.conf $(DESTDIR)$(SYSCONFDIR)/slitaz/tazlab.conf
 	install -Dm644 README.md   $(DESTDIR)$(PREFIX)/share/doc/tazlab/README.md
 
