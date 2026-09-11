@@ -747,9 +747,14 @@ cmd_umount() {
 # hostname to 'slitaz'; without unshare we drop the rename so the host keeps
 # its own hostname.
 in_chroot() {
-	# sudo keeps LANGUAGE from the host; gettext prefers it over LC_ALL,
-	# so every localized build would come out in the host language.
-	unset LANGUAGE
+	# sudo keeps LANG, LANGUAGE and LC_* from the host: gettext prefers
+	# LANGUAGE over LC_ALL, so localized builds came out in the host
+	# language, and a host locale the chroot lacks (de_DE.UTF-8...) makes
+	# bash warn "setlocale: LC_ALL: cannot change locale" on every spawn.
+	# Builds run in the C locale; `tazlab enter` still gets the chroot's
+	# own locale from /etc/profile.
+	unset LANGUAGE LANG
+	export LC_ALL=C
 	if [ -n "$UNSHARE" ]; then
 		$UNSHARE chroot "$CHROOT" /bin/sh -c "hostname slitaz; $1"
 	else
